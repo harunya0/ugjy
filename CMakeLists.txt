@@ -5,6 +5,29 @@ project(ugjy VERSION 0.1.0 LANGUAGES C)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
+
+option(UGJY_PORTABLE "Disable -march=native for portable binaries" OFF)
+if(MSVC)
+    add_compile_options(/O2 /W3 /MP)
+else()
+    if(NOT UGJY_PORTABLE)
+        add_compile_options(-march=native)
+    endif()
+    add_compile_options(
+        -Wall -Wextra -Wpedantic
+        -O3 -flto
+        -fno-math-errno
+        -fno-trapping-math
+        -fomit-frame-pointer
+        -ffunction-sections -fdata-sections
+    )
+    add_link_options(-flto -O3)
+    if(NOT APPLE)
+        add_link_options(-Wl,--gc-sections)
+        add_link_options(-s)
+    endif()
+endif()
+
 # 開発時のバグを早期発見するためのコンパイラ警告
 if(MSVC)
     add_compile_options(/W4)
@@ -25,6 +48,7 @@ add_executable(ugjy ${SOURCES})
 target_include_directories(ugjy PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/Inc
     ${CMAKE_CURRENT_SOURCE_DIR}/Lib
+    ${CMAKE_CURRENT_SOURCE_DIR}/Lib/onnxruntime/include
 )
 
 # 将来 Lib/ 配下に置く外部ライブラリ（.so, .a, .lib など）の検索パス
@@ -34,5 +58,14 @@ target_link_directories(ugjy PRIVATE
 
 # Linux 環境用: 数学関数（math.h）やスレッド（pthread）を使う場合の標準ライブラリ
 if(UNIX AND NOT APPLE)
-    target_link_libraries(ugjy PRIVATE m pthread)
+    target_link_libraries(ugjy PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/Lib/onnxruntime/lib/libonnxruntime.so
+        m
+        pthread
+    )
 endif()
+
+# 実行時に libonnxruntime.so を自動で読み込めるようにする
+set_target_properties(ugjy PROPERTIES
+    BUILD_RPATH "${CMAKE_CURRENT_SOURCE_DIR}/Lib/onnxruntime/lib"
+)

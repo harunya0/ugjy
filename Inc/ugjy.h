@@ -9,13 +9,16 @@ extern "C" {
 #endif
 
 typedef struct {
-    uint32_t speaker_id; // 話者ID（モデルによっては32bitあると安心）
-    float speed;         // 話速 (1.0 = 標準)
-    float pitch;         // ピッチ (1.0 = 標準)
-    float energy;        // 音量・エネルギー (1.0 = 標準)
-    uint8_t emotion;     // 感情
-    uint8_t style;       // スタイル
-    uint8_t reserved[2]; // 4バイトアライメント用のパディング
+    uint32_t speaker_id;        // 固定話者ID（プリセットを使う場合）
+    const float* speaker_embed; // 自分の声の特徴量ベクトル（NULLなら speaker_id を使用）
+    size_t embed_dim;           // ベクトルの長さ
+
+    float speed;                // 話速
+    float pitch;                // ピッチ
+    float energy;               // 音量
+    uint8_t emotion;            // 感情
+    uint8_t style;              // スタイル
+    uint8_t reserved[2];
 } ugjy_t;
 
 // デフォルト値マクロ
@@ -49,6 +52,39 @@ int ugjy_synthesize(
     size_t max_samples,          // 出力バッファの最大容量
     size_t* out_samples          // 実際に生成されたサンプル数
 );
+
+// モデルに必要な推奨メモリプールサイズ（バイト数）を返す
+size_t ugjy_get_required_memory(const char* model_path);
+
+// モデルに含まれる話者数を取得
+uint32_t ugjy_get_num_speakers(ugjy_context_t* ctx);
+
+// float の PCM 配列を 16-bit PCM WAV ファイルとして保存
+int ugjy_write_wav(
+    const char* filepath,
+    const float* pcm,
+    size_t num_samples,
+    int sample_rate
+);
+
+// ストリーミング用コールバック型
+typedef int (*ugjy_stream_callback_t)(
+    const float* pcm_chunk, 
+    size_t chunk_samples, 
+    void* user_data
+);
+
+// できた音声から順次コールバックに流す
+int ugjy_synthesize_stream(
+    ugjy_context_t* ctx,
+    const int64_t* tokens,
+    size_t num_tokens,
+    const ugjy_t* params,
+    ugjy_stream_callback_t callback,
+    void* user_data
+);
+
+void ugjy_destroy(ugjy_context_t* ctx);
 
 #ifdef __cplusplus
 }
