@@ -1,0 +1,79 @@
+# Downloaded models and third-party libraries (fetched by setup.sh / setup.bat)
+/models/
+/Lib/
+
+# CMake build outputs
+/build/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+
+# --- C / C++ Compilation Artifacts ---
+*.o
+*.obj
+*.so
+*.so.*
+*.dylib
+*.dll
+*.a
+*.lib
+*.exe
+compile_commands.json
+.ninja_*
+build.ninja
+
+# --- C# (.NET) ---
+**/[Bb]in/
+**/[Oo]bj/
+*.user
+*.userosv
+*.suo
+.vs/
+*.nuget.props
+*.nuget.targets
+
+# --- Rust ---
+**/target/
+**/*.rs.bk
+*.pdb
+Cargo.lock
+
+# --- Go ---
+bindings/go/bin/
+*.test
+*.prof
+
+# --- Java ---
+bindings/java/bin/
+*.class
+*.jar
+*.war
+*.ear
+hs_err_pid*
+replay_pid*
+
+# --- Python ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# --- Temporary & Scratch Files ---
+*.tmp
+*.temp
+*.log
+tmp/*
+
+# --- IDEs, Editors & OS Files ---
+.vscode/*
+!.vscode/settings.json
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+ehthumbs.db
+[Dd]esktop.ini
+.cache/
