@@ -30,6 +30,10 @@ int ugjy_model_load(
     model->num_speakers = 1;
     model->has_speaker_id = false;
     model->has_f0_input = false;
+    model->has_lid = false;
+    model->has_prosody = false;
+    model->has_speaker_embedding = false;
+    model->has_speaker_embedding_mask = false;
 
     // モデルの入力ノードを走査してsidやf0の有無を確認
     size_t num_inputs = 0;
@@ -41,12 +45,21 @@ int ugjy_model_load(
         char *input_name = NULL;
         ORT_CHECK(model->onnx.api, model->onnx.api->SessionGetInputName(model->onnx.session, i, allocator, &input_name));
         if (input_name) {
+            printf("  [ONNX Input %zu]: %s\n", i, input_name);
             if (strcmp(input_name, "sid") == 0 || strcmp(input_name, "speaker_id") == 0) {
                 model->has_speaker_id = true;
                 model->num_speakers = 512; // マルチ話者対応
             }
             if (strcmp(input_name, "f0") == 0 || strcmp(input_name, "pitch") == 0) {
                 model->has_f0_input = true;
+            } else if (strcmp(input_name, "lid") == 0) {
+                model->has_lid = true;
+            } else if (strcmp(input_name, "prosody_features") == 0) {
+                model->has_prosody = true;
+            } else if (strcmp(input_name, "speaker_embedding") == 0) {
+                model->has_speaker_embedding = true;
+            } else if (strcmp(input_name, "speaker_embedding_mask") == 0) {
+                model->has_speaker_embedding_mask = true;
             }
             allocator->Free(allocator, input_name);
         }
@@ -171,6 +184,50 @@ static OrtValue *build_f0_tensor(
     );
 }
 
+// 言語ID (日本語: 0)
+static OrtValue *build_lid_tensor(ugjy_onnx_session_t *onnx, ugjy_arena_t *arena, uint32_t lid) {
+    int64_t *buf = (int64_t *)ugjy_arena_alloc(arena, sizeof(int64_t));
+    if (!buf) return NULL;
+    *buf = (int64_t)lid; // 日本語
+    int64_t shape[1] = {1};
+    return ugjy_onnx_create_tensor(onnx, buf, sizeof(int64_t), shape, 1, ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64);
+}
+
+// プロソディ特徴量 (A1, A2, A3)
+static OrtValue *build_prosody_tensor(
+    ugjy_onnx_session_t *onnx,
+    ugjy_arena_t *arena,
+    const int64_t *prosody_features,
+    size_t num_tokens
+) {
+    int64_t *buf = (int64_t *)ugjy_arena_alloc(arena, num_tokens * 3 * sizeof(int64_t));
+    if (!buf) return NULL;
+    if (prosody_features) {
+        memcpy(buf, prosody_features, num_tokens * 3 * sizeof(int64_t));
+    } else {
+        memset(buf, 0, num_tokens * 3 * sizeof(int64_t));
+    }
+    int64_t shape[3] = {1, (int64_t)num_tokens, 3};
+    return ugjy_onnx_create_tensor(onnx, buf, num_tokens * 3 * sizeof(int64_t), shape, 3, ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64);
+}
+
+// 話者埋め込みベクトル (256次元)
+static OrtValue *build_speaker_embedding_tensor(ugjy_onnx_session_t *onnx, ugjy_arena_t *arena) {
+    float *buf = (float *)ugjy_arena_alloc_zero(arena, 256 * sizeof(float));
+    if (!buf) return NULL;
+    int64_t shape[2] = {1, 256};
+    return ugjy_onnx_create_tensor(onnx, buf, 256 * sizeof(float), shape, 2, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT);
+}
+
+// 話者マスク (値: 0: 通常の学習済み話者ID・言語IDを使用)
+static OrtValue *build_speaker_embedding_mask_tensor(ugjy_onnx_session_t *onnx, ugjy_arena_t *arena) {
+    int64_t *buf = (int64_t *)ugjy_arena_alloc(arena, sizeof(int64_t));
+    if (!buf) return NULL;
+    *buf = 0; // 0 = 通常話者モード (1にすると未学習のzero-shot話者転送層にルーティングされてしまう)
+    int64_t shape[2] = {1, 1};
+    return ugjy_onnx_create_tensor(onnx, buf, sizeof(int64_t), shape, 2, ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64);
+}
+
 int ugjy_model_infer(
     ugjy_model_t *model,
     ugjy_arena_t *arena,
@@ -189,9 +246,9 @@ int ugjy_model_infer(
     int ret_code = 0;
 
     // テンソル保持用
-    const char *input_names[8];
-    const OrtValue *input_tensors[8];
-    OrtValue *allocated_tensors[8];
+    const char *input_names[16];
+    const OrtValue *input_tensors[16];
+    OrtValue *allocated_tensors[16];
     size_t num_inputs = 0;
     size_t num_allocated = 0;
     
@@ -204,14 +261,26 @@ int ugjy_model_infer(
         num_inputs++; \
     } while (0)
 
-    PUSH_INPUT("tokens", build_tokens_tensor(&model->onnx, arena, req->tokens, req->num_tokens));
-    PUSH_INPUT("tokens_length", build_length_tensor(&model->onnx, arena, req->num_tokens));
+    PUSH_INPUT("input", build_tokens_tensor(&model->onnx, arena, req->tokens, req->num_tokens));
+    PUSH_INPUT("input_lengths", build_length_tensor(&model->onnx, arena, req->num_tokens));
     PUSH_INPUT("scales", build_scales_tensor(&model->onnx, arena, req->speed, req->noise_scale, req->noise_scale_w));
     if (model->has_speaker_id) {
         PUSH_INPUT("sid", build_sid_tensor(&model->onnx, arena, req->speaker_id));
     }
     if (model->has_f0_input && req->f0_sequence && req->f0_length > 0) {
         PUSH_INPUT("f0", build_f0_tensor(&model->onnx, arena, req->f0_sequence, req->f0_length));
+    }
+    if (model->has_lid) {
+        PUSH_INPUT("lid", build_lid_tensor(&model->onnx, arena, req->language_id));
+    }
+    if (model->has_prosody) {
+        PUSH_INPUT("prosody_features", build_prosody_tensor(&model->onnx, arena, req->prosody_features, req->num_tokens));
+    }
+    if (model->has_speaker_embedding) {
+        PUSH_INPUT("speaker_embedding", build_speaker_embedding_tensor(&model->onnx, arena));
+    }
+    if (model->has_speaker_embedding_mask) {
+        PUSH_INPUT("speaker_embedding_mask", build_speaker_embedding_mask_tensor(&model->onnx, arena));
     }
     #undef PUSH_INPUT
 

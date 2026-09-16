@@ -13,20 +13,29 @@ extern "C" {
 
 // モデル管理構造体
 typedef struct {
-    ugjy_onnx_session_t onnx;         // ONNXセッション
-    uint32_t            sample_rate;  // サンプルレート
-    uint32_t            num_speakers; // スピーカー数
+    ugjy_onnx_session_t onnx;           // ONNXセッション
+    uint32_t            sample_rate;    // サンプルレート
+    uint32_t            num_speakers;   // スピーカー数
     bool                has_speaker_id; // sid入力が必要か
     bool                has_f0_input;   // f0入力が必要か
+
+    bool                has_lid;        // 言語idがあるか
+    bool                has_prosody;    // 韻律特徴量があるか
+    bool                has_speaker_embedding; // 話者埋め込みがあるか
+    bool                has_speaker_embedding_mask; // 話者埋め込みマスクがあるか
 } ugjy_model_t;
 
 typedef struct {
     const int64_t *tokens;      // 音素ID列
     size_t         num_tokens;  // トークン数
     uint32_t       speaker_id;  // 話者ID
+    uint32_t       language_id; // 言語ID (日本語: 0)
     float          speed;       // 話速(1.0 = 通常速度)
     float          noise_scale; // 音色表現(0.667)
     float          noise_scale_w; // 音素長揺らぎ(0.8)
+
+    // 韻律情報 (A1/A2/A3, NULLなら全ゼロ)
+    const int64_t *prosody_features;
 
     // 歌唱用パラメーター(NULLならTTS)
     const float   *f0_sequence;  // 各フレームのピッチ(Hz)

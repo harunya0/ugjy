@@ -78,3 +78,7 @@ ehthumbs.db
 [Dd]esktop.ini
 .cache/
 tmp/
+
+# --generated wav files--
+*.wav
+wav/

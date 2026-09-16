@@ -58,9 +58,11 @@ int ugjy_synthesize(
         .tokens           = tokens,
         .num_tokens       = num_tokens,
         .speaker_id       = p.speaker_id,
+        .language_id      = p.language_id,
         .speed            = p.speed,
-        .noise_scale      = 0.667f,
-        .noise_scale_w    = 0.8f,
+        .noise_scale      = (p.noise_scale > 0.0f) ? p.noise_scale : 0.4f,
+        .noise_scale_w    = (p.noise_scale_w > 0.0f) ? p.noise_scale_w : 0.6f,
+        .prosody_features = p.prosody_features,
         .f0_sequence      = NULL, // 通常TTS
         .f0_length        = 0,
         .durations        = NULL,
@@ -135,6 +137,43 @@ int ugjy_synthesize_stream(
 
     ugjy_arena_restore(&ctx->arena, marker);
     return ret;
+}
+
+int ugjy_synthesize_text(
+    ugjy_context_t *ctx,
+    ugjy_g2p_t     *g2p,
+    const char     *text,
+    const char     *lang,
+    const ugjy_t   *params,
+    float          *out_pcm,
+    size_t          max_samples,
+    size_t         *out_samples
+) {
+    if (!ctx || !g2p || !text || !out_pcm || !out_samples) {
+        return -1;
+    }
+
+    int64_t tokens[512];
+    int64_t prosody[512 * 3];
+    size_t num_tokens = 0;
+
+    // テキストからトークンと韻律を自動生成
+    int ret = ugjy_g2p_convert(g2p, text, lang, tokens, prosody, 512, &num_tokens);
+    if (ret != 0 || num_tokens == 0) {
+        return ret ? ret : -2;
+    }
+
+    // 言語IDと韻律を設定
+    ugjy_t p = params ? *params : UGJY_DEFAULT_PARAMS;
+    p.prosody_features = prosody;
+    if (lang && strcmp(lang, "en") == 0) {
+        p.language_id = 1;
+    } else {
+        p.language_id = 0; // "ja"
+    }
+
+    // ONNX 推論
+    return ugjy_synthesize(ctx, tokens, num_tokens, &p, out_pcm, max_samples, out_samples);
 }
 
 void ugjy_destroy(ugjy_context_t *ctx) {

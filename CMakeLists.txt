@@ -60,8 +60,10 @@ target_link_directories(ugjy PRIVATE
 if(UNIX AND NOT APPLE)
     target_link_libraries(ugjy PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/Lib/onnxruntime/lib/libonnxruntime.so
+        ${CMAKE_CURRENT_SOURCE_DIR}/Lib/libugjy_g2p.a
         m
         pthread
+        dl
     )
 endif()
 
