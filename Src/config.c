@@ -5,7 +5,8 @@ static const ugjy_config_t DEFAULT_CONFIG = {
     .sample_rate = 16000,
     .max_tokens = 512,
     .max_audio_sec = 30,
-    .flags = UGJY_FLAG_NONE
+    .flags = UGJY_FLAG_NONE,
+    .num_threads = 4
 };
 
 static ugjy_config_t g_config = {
@@ -13,7 +14,8 @@ static ugjy_config_t g_config = {
     .sample_rate = 16000,
     .max_tokens = 512,
     .max_audio_sec = 30,
-    .flags = UGJY_FLAG_NONE
+    .flags = UGJY_FLAG_NONE,
+    .num_threads = 4
 };
 
 // デフォルト設定の取得
@@ -60,4 +62,10 @@ void ugjy_config_set_max_audio_sec(uint32_t max_audio_sec) {
 
 void ugjy_config_set_flags(uint32_t flags) {
     g_config.flags = flags;
+}
+
+void ugjy_config_set_num_threads(uint8_t num_threads) {
+    if (num_threads > 0) {
+        g_config.num_threads = num_threads;
+    }
 }

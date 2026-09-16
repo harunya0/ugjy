@@ -3,6 +3,16 @@
 #include <string.h>
 #include <stdio.h>
 
+// エラーチェック用マクロ
+#define ORT_CHECK(api, expr) do { \
+    OrtStatus* status = (expr); \
+    if (status != NULL) { \
+        fprintf(stderr, "[ugjy_onnx error] %s\n", (api)->GetErrorMessage(status)); \
+        (api)->ReleaseStatus(status); \
+        return -1; \
+    } \
+} while (0)
+
 int ugjy_model_load(
     ugjy_model_t *model,
     const char *model_path,

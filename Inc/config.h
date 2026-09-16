@@ -30,16 +30,6 @@ extern "C" {
 #define UGJY_BF_SET(val, new_val, shift, mask) \
     ((val) = ((val) & ~((mask) << (shift))) | (((new_val) & (mask)) << (shift)))
 
-// エラーチェック用マクロ
-#define ORT_CHECK(api, expr) do { \
-    OrtStatus* status = (expr); \
-    if (status != NULL) { \
-        fprintf(stderr, "[ugjy_onnx error] %s\n", (api)->GetErrorMessage(status)); \
-        (api)->ReleaseStatus(status); \
-        return -1; \
-    } \
-} while (0)
-
 typedef enum {
     UGJY_FLAG_NONE          = 0,
     UGJY_FLAG_STREAMING     = (1U << 0), // ストリーミング生成モード
@@ -55,6 +45,7 @@ typedef struct {
     uint32_t max_tokens;         // 1文の最大トークン数
     uint32_t max_audio_sec;      // 最大生成秒数
     uint32_t flags;              // 各種フラグ (ugjy_flags_t)
+    uint8_t num_threads;          // 推論スレッド数 (デフォルト4)
 } ugjy_config_t;
 
 ugjy_config_t ugjy_config_default(void);
@@ -69,6 +60,7 @@ void ugjy_config_set_arena_size(size_t size);
 void ugjy_config_set_max_tokens(uint32_t max_tokens);
 void ugjy_config_set_max_audio_sec(uint32_t max_audio_sec);
 void ugjy_config_set_flags(uint32_t flags);
+void ugjy_config_set_num_threads(uint8_t num_threads);
 
 // 推奨アリーナサイズ
 #define UGJY_DEFAULT_ARENA_SIZE (32 * 1024 * 1024)
