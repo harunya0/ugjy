@@ -1,17 +1,8 @@
+#include "config.h"
 #include "ugjy_onnx.h"
 #include "onnxruntime_c_api.h"
 #include <stdio.h>
 #include <string.h>
-
-// エラーチェック用マクロ
-#define ORT_CHECK(api, expr) do { \
-    OrtStatus* status = (expr); \
-    if (status != NULL) { \
-        fprintf(stderr, "[ugjy_onnx error] %s\n", (api)->GetErrorMessage(status)); \
-        (api)->ReleaseStatus(status); \
-        return -1; \
-    } \
-} while (0)
 
 int ugjy_onnx_session_init(
     ugjy_onnx_session_t *s,

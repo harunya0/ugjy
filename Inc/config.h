@@ -8,6 +8,9 @@ extern "C" {
 #include <stdint.h>
 #include <stddef.h>
 
+// サンプルレート
+#define UGJY_SAMPLE_RATE 16000
+
 // 2のべき乗かチェック
 #define UGJY_IS_POW2(x) (((x) != 0) && (((x) & ((x) - 1)) == 0))
 // 指定アライメント（2のべき乗）に切り上げ (例: ALIGN_UP(15, 64) -> 64)
@@ -26,6 +29,16 @@ extern "C" {
 #define UGJY_BF_GET(val, shift, mask) (((val) >> (shift)) & (mask))
 #define UGJY_BF_SET(val, new_val, shift, mask) \
     ((val) = ((val) & ~((mask) << (shift))) | (((new_val) & (mask)) << (shift)))
+
+// エラーチェック用マクロ
+#define ORT_CHECK(api, expr) do { \
+    OrtStatus* status = (expr); \
+    if (status != NULL) { \
+        fprintf(stderr, "[ugjy_onnx error] %s\n", (api)->GetErrorMessage(status)); \
+        (api)->ReleaseStatus(status); \
+        return -1; \
+    } \
+} while (0)
 
 typedef enum {
     UGJY_FLAG_NONE          = 0,
