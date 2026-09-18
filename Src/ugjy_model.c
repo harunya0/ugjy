@@ -1,9 +1,9 @@
 #include "ugjy_model.h"
-#include "config.h"
+#include "ugjy_arena.h"
 #include <string.h>
 #include <stdio.h>
+#include <math.h>
 
-// エラーチェック用マクロ
 #define ORT_CHECK(api, expr) do { \
     OrtStatus* status = (expr); \
     if (status != NULL) { \
@@ -15,217 +15,58 @@
 
 int ugjy_model_load(
     ugjy_model_t *model,
-    const char *model_path,
+    const char *model_dir,
     int num_threads
 ) {
-    if (!model || !model_path) return -1;
+    if (!model || !model_dir) return -1;
     memset(model, 0, sizeof(*model));
 
-    // ONNXセッションを初期化
-    int ret = ugjy_onnx_session_init(&model->onnx, model_path, num_threads);
-    if (ret != 0) return ret;
+    char path[1024];
 
-    // デフォルト値の設定（後でモデルメタデータから取得も可能）
-    model->sample_rate = UGJY_SAMPLE_RATE; // 16000Hz
-    model->num_speakers = 1;
-    model->has_speaker_id = false;
-    model->has_f0_input = false;
-    model->has_lid = false;
-    model->has_prosody = false;
-    model->has_speaker_embedding = false;
-    model->has_speaker_embedding_mask = false;
-
-    // モデルの入力ノードを走査してsidやf0の有無を確認
-    size_t num_inputs = 0;
-    ORT_CHECK(model->onnx.api, model->onnx.api->SessionGetInputCount(model->onnx.session, &num_inputs));
-    OrtAllocator *allocator = NULL;
-    ORT_CHECK(model->onnx.api, model->onnx.api->GetAllocatorWithDefaultOptions(&allocator));
-
-    for (size_t i = 0; i < num_inputs; i++) {
-        char *input_name = NULL;
-        ORT_CHECK(model->onnx.api, model->onnx.api->SessionGetInputName(model->onnx.session, i, allocator, &input_name));
-        if (input_name) {
-            printf("  [ONNX Input %zu]: %s\n", i, input_name);
-            if (strcmp(input_name, "sid") == 0 || strcmp(input_name, "speaker_id") == 0) {
-                model->has_speaker_id = true;
-                model->num_speakers = 512; // マルチ話者対応
-            }
-            if (strcmp(input_name, "f0") == 0 || strcmp(input_name, "pitch") == 0) {
-                model->has_f0_input = true;
-            } else if (strcmp(input_name, "lid") == 0) {
-                model->has_lid = true;
-            } else if (strcmp(input_name, "prosody_features") == 0) {
-                model->has_prosody = true;
-            } else if (strcmp(input_name, "speaker_embedding") == 0) {
-                model->has_speaker_embedding = true;
-            } else if (strcmp(input_name, "speaker_embedding_mask") == 0) {
-                model->has_speaker_embedding_mask = true;
-            }
-            allocator->Free(allocator, input_name);
-        }
+    // 1. embedder_model.onnx
+    snprintf(path, sizeof(path), "%s/embedder_model.onnx", model_dir);
+    int ret = ugjy_onnx_session_init(&model->embedder, path, num_threads);
+    if (ret != 0) {
+        fprintf(stderr, "[ugjy] Failed to load embedder: %s\n", path);
+        return ret;
     }
+
+    // 2. variance_model.onnx
+    snprintf(path, sizeof(path), "%s/variance_model.onnx", model_dir);
+    ret = ugjy_onnx_session_init(&model->variance, path, num_threads);
+    if (ret != 0) {
+        fprintf(stderr, "[ugjy] Failed to load variance: %s\n", path);
+        ugjy_onnx_destroy(&model->embedder);
+        return ret;
+    }
+
+    // 3. decoder_model.onnx
+    snprintf(path, sizeof(path), "%s/decoder_model.onnx", model_dir);
+    ret = ugjy_onnx_session_init(&model->decoder, path, num_threads);
+    if (ret != 0) {
+        fprintf(stderr, "[ugjy] Failed to load decoder: %s\n", path);
+        ugjy_onnx_destroy(&model->embedder);
+        ugjy_onnx_destroy(&model->variance);
+        return ret;
+    }
+
+    model->sample_rate = 48000;
+    model->default_speaker = 4; // つくよみちゃん「おしとやかv3」
+
+    printf("[ugjy] 高性能ツクヨミちゃんモデル読み込み完了 (48000Hz, HiFi-GAN)\n");
     return 0;
 }
 
 void ugjy_model_destroy(ugjy_model_t *model) {
     if (!model) return;
-    ugjy_onnx_destroy(&model->onnx);
-    memset(model, 0, sizeof(*model));
+    ugjy_onnx_destroy(&model->embedder);
+    ugjy_onnx_destroy(&model->variance);
+    ugjy_onnx_destroy(&model->decoder);
 }
 
-// tokens配列をONNXのテンソルに変換
-static OrtValue *build_tokens_tensor(
-    ugjy_onnx_session_t *onnx,
-    ugjy_arena_t *arena,
-    const int64_t *tokens,
-    size_t num_tokens
-) {
-    int64_t *buf = (int64_t *)ugjy_arena_alloc(arena, num_tokens * sizeof(int64_t));
-    if (!buf) return NULL;
-    memcpy(buf, tokens, num_tokens * sizeof(int64_t));
-
-    int64_t shape[2] = {1, (int64_t)num_tokens};
-    return ugjy_onnx_create_tensor(
-        onnx,
-        buf,
-        num_tokens * sizeof(int64_t),
-        shape,
-        2,
-        ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64
-    );
-}
-
-// tokens_lengthの長さを持つint64_t配列をONNXのテンソルに変換
-static OrtValue *build_length_tensor(
-    ugjy_onnx_session_t *onnx,
-    ugjy_arena_t *arena,
-    size_t num_tokens
-) {
-    int64_t *buf = (int64_t *)ugjy_arena_alloc(arena, sizeof(int64_t));
-    if (!buf) return NULL;
-    *buf = (int64_t)num_tokens;
-
-    int64_t shape[1] = {1};
-    return ugjy_onnx_create_tensor(
-        onnx,
-        buf,
-        sizeof(int64_t),
-        shape,
-        1,
-        ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64
-    );
-}
-
-// scalesをONNXのテンソルに変換
-static OrtValue *build_scales_tensor(
-    ugjy_onnx_session_t *onnx,
-    ugjy_arena_t *arena,
-    float speed,
-    float noise_scale,
-    float noise_scale_w
-) {
-    float *buf = (float *)ugjy_arena_alloc(arena, 3 * sizeof(float));
-    if (!buf) return NULL;
-    buf[0] = (noise_scale > 0.0f) ? noise_scale : 0.667;
-    buf[1] = (speed > 0.0f) ? (1.0f / speed) : 1.0f;
-    buf[2] = (noise_scale_w > 0.0f) ? noise_scale_w : 0.8f;
-
-    int64_t shape[1] = {3};
-    return ugjy_onnx_create_tensor(
-        onnx,
-        buf,
-        3 * sizeof(float),
-        shape,
-        1,
-        ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT
-    );
-}
-
-// sid（話者ID: int64_t）をONNXのテンソルに変換
-static OrtValue *build_sid_tensor(
-    ugjy_onnx_session_t *onnx,
-    ugjy_arena_t *arena,
-    uint32_t sid
-) {
-    int64_t *buf = (int64_t *)ugjy_arena_alloc(arena, sizeof(int64_t));
-    if (!buf) return NULL;
-    *buf = (int64_t)sid;
-
-    int64_t shape[1] = {1};
-    return ugjy_onnx_create_tensor(
-        onnx,
-        buf,
-        sizeof(int64_t),
-        shape,
-        1,
-        ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64
-    );
-}
-
-// f0（歌声用ピッチ: float[1, T]）をONNXのテンソルに変換
-static OrtValue *build_f0_tensor(
-    ugjy_onnx_session_t *onnx,
-    ugjy_arena_t *arena,
-    const float *f0,
-    size_t f0_len
-) {
-    float *buf = (float *)ugjy_arena_alloc(arena, f0_len * sizeof(float));
-    if (!buf) return NULL;
-    memcpy(buf, f0, f0_len * sizeof(float));
-
-    int64_t shape[2] = {1, (int64_t)f0_len};
-    return ugjy_onnx_create_tensor(
-        onnx,
-        buf,
-        f0_len * sizeof(float),
-        shape,
-        2,
-        ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT
-    );
-}
-
-// 言語ID (日本語: 0)
-static OrtValue *build_lid_tensor(ugjy_onnx_session_t *onnx, ugjy_arena_t *arena, uint32_t lid) {
-    int64_t *buf = (int64_t *)ugjy_arena_alloc(arena, sizeof(int64_t));
-    if (!buf) return NULL;
-    *buf = (int64_t)lid; // 日本語
-    int64_t shape[1] = {1};
-    return ugjy_onnx_create_tensor(onnx, buf, sizeof(int64_t), shape, 1, ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64);
-}
-
-// プロソディ特徴量 (A1, A2, A3)
-static OrtValue *build_prosody_tensor(
-    ugjy_onnx_session_t *onnx,
-    ugjy_arena_t *arena,
-    const int64_t *prosody_features,
-    size_t num_tokens
-) {
-    int64_t *buf = (int64_t *)ugjy_arena_alloc(arena, num_tokens * 3 * sizeof(int64_t));
-    if (!buf) return NULL;
-    if (prosody_features) {
-        memcpy(buf, prosody_features, num_tokens * 3 * sizeof(int64_t));
-    } else {
-        memset(buf, 0, num_tokens * 3 * sizeof(int64_t));
-    }
-    int64_t shape[3] = {1, (int64_t)num_tokens, 3};
-    return ugjy_onnx_create_tensor(onnx, buf, num_tokens * 3 * sizeof(int64_t), shape, 3, ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64);
-}
-
-// 話者埋め込みベクトル (256次元)
-static OrtValue *build_speaker_embedding_tensor(ugjy_onnx_session_t *onnx, ugjy_arena_t *arena) {
-    float *buf = (float *)ugjy_arena_alloc_zero(arena, 256 * sizeof(float));
-    if (!buf) return NULL;
-    int64_t shape[2] = {1, 256};
-    return ugjy_onnx_create_tensor(onnx, buf, 256 * sizeof(float), shape, 2, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT);
-}
-
-// 話者マスク (値: 0: 通常の学習済み話者ID・言語IDを使用)
-static OrtValue *build_speaker_embedding_mask_tensor(ugjy_onnx_session_t *onnx, ugjy_arena_t *arena) {
-    int64_t *buf = (int64_t *)ugjy_arena_alloc(arena, sizeof(int64_t));
-    if (!buf) return NULL;
-    *buf = 0; // 0 = 通常話者モード (1にすると未学習のzero-shot話者転送層にルーティングされてしまう)
-    int64_t shape[2] = {1, 1};
-    return ugjy_onnx_create_tensor(onnx, buf, sizeof(int64_t), shape, 2, ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64);
+// 無声母音・ポーズ・促音判定 (SHAREVOX音素インデックス: 0:pau, 1:A, 2:E, 3:I, 5:O, 6:U, 11:cl)
+static inline bool is_unvoiced_phoneme(int64_t ph) {
+    return ph == 0 || ph == 1 || ph == 2 || ph == 3 || ph == 5 || ph == 6 || ph == 11;
 }
 
 int ugjy_model_infer(
@@ -237,95 +78,246 @@ int ugjy_model_infer(
     size_t *out_samples
 ) {
     if (!model || !arena || !req || !out_pcm || !out_samples) return -1;
-    if (!req->tokens || req->num_tokens == 0) return -2;
+    if (req->num_tokens == 0) return -2;
 
     *out_samples = 0;
-
-    // アリーナの現在位置をしおりとして保存
     size_t arena_marker = ugjy_arena_mark(arena);
     int ret_code = 0;
 
-    // テンソル保持用
-    const char *input_names[16];
-    const OrtValue *input_tensors[16];
-    OrtValue *allocated_tensors[16];
-    size_t num_inputs = 0;
-    size_t num_allocated = 0;
-    
-    #define PUSH_INPUT(name, tensor_expr) do { \
-        OrtValue *t = (tensor_expr); \
-        if (!t) { ret_code = -10; goto cleanup; } \
-        allocated_tensors[num_allocated++] = t; \
-        input_names[num_inputs] = (name); \
-        input_tensors[num_inputs] = t; \
-        num_inputs++; \
-    } while (0)
+    int64_t speaker_id = (req->speaker_id > 0) ? (int64_t)req->speaker_id : (int64_t)model->default_speaker;
+    float speed = (req->speed > 0.0f) ? req->speed : 1.0f;
+    size_t L = req->num_tokens;
 
-    PUSH_INPUT("input", build_tokens_tensor(&model->onnx, arena, req->tokens, req->num_tokens));
-    PUSH_INPUT("input_lengths", build_length_tensor(&model->onnx, arena, req->num_tokens));
-    PUSH_INPUT("scales", build_scales_tensor(&model->onnx, arena, req->speed, req->noise_scale, req->noise_scale_w));
-    if (model->has_speaker_id) {
-        PUSH_INPUT("sid", build_sid_tensor(&model->onnx, arena, req->speaker_id));
-    }
-    if (model->has_f0_input && req->f0_sequence && req->f0_length > 0) {
-        PUSH_INPUT("f0", build_f0_tensor(&model->onnx, arena, req->f0_sequence, req->f0_length));
-    }
-    if (model->has_lid) {
-        PUSH_INPUT("lid", build_lid_tensor(&model->onnx, arena, req->language_id));
-    }
-    if (model->has_prosody) {
-        PUSH_INPUT("prosody_features", build_prosody_tensor(&model->onnx, arena, req->prosody_features, req->num_tokens));
-    }
-    if (model->has_speaker_embedding) {
-        PUSH_INPUT("speaker_embedding", build_speaker_embedding_tensor(&model->onnx, arena));
-    }
-    if (model->has_speaker_embedding_mask) {
-        PUSH_INPUT("speaker_embedding_mask", build_speaker_embedding_mask_tensor(&model->onnx, arena));
-    }
-    #undef PUSH_INPUT
+    // ----------------------------------------------------
+    // Step 1: Embedder 推論
+    // ----------------------------------------------------
+    int64_t *phoneme_buf = (int64_t *)ugjy_arena_alloc(arena, L * sizeof(int64_t));
+    if (!phoneme_buf) { ret_code = -10; goto cleanup; }
+    memcpy(phoneme_buf, req->tokens, L * sizeof(int64_t));
 
-    // 推論実行
-    const char *output_names[1] = {"output"};
-    OrtValue *output_tensors[1] = {NULL};
+    int64_t shape_L[2] = {1, (int64_t)L};
+    OrtValue *t_phonemes = ugjy_onnx_create_tensor(&model->embedder, phoneme_buf, L * sizeof(int64_t), shape_L, 2, ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64);
+    if (!t_phonemes) { ret_code = -11; goto cleanup; }
 
-    int run_ret = ugjy_onnx_run(
-        &model->onnx,
-        input_names,
-        input_tensors,
-        num_inputs,
-        output_names,
-        1,
-        output_tensors
-    );
-    if (run_ret != 0 || !output_tensors[0]) {
-        ret_code = -30;
+    const char *emb_in_names[] = {"phonemes"};
+    const OrtValue *emb_in_tensors[] = {t_phonemes};
+    const char *emb_out_names[] = {"feature_embedded"};
+    OrtValue *emb_out_tensors[1] = {NULL};
+
+    if (ugjy_onnx_run(&model->embedder, emb_in_names, emb_in_tensors, 1, emb_out_names, 1, emb_out_tensors) != 0 || !emb_out_tensors[0]) {
+        model->embedder.api->ReleaseValue(t_phonemes);
+        ret_code = -12;
         goto cleanup;
     }
 
-    float *audio_raw = NULL;
-    ORT_CHECK(model->onnx.api, model->onnx.api->GetTensorMutableData(output_tensors[0], (void **)&audio_raw));
-    OrtTensorTypeAndShapeInfo *shape_info = NULL;
-    ORT_CHECK(model->onnx.api, model->onnx.api->GetTensorTypeAndShape(output_tensors[0], &shape_info));
-    size_t total_elements = 0;
-    ORT_CHECK(model->onnx.api, model->onnx.api->GetTensorShapeElementCount(shape_info, &total_elements));
-    model->onnx.api->ReleaseTensorTypeAndShapeInfo(shape_info);
+    float *feature_embedded = NULL;
+    ORT_CHECK(model->embedder.api, model->embedder.api->GetTensorMutableData(emb_out_tensors[0], (void **)&feature_embedded));
 
-    // 出力波形をout_pcmにコピー
-    size_t copy_samples = (total_elements > max_samples) ? max_samples : total_elements;
-    if (audio_raw && copy_samples > 0) {
-        memcpy(out_pcm, audio_raw, copy_samples * sizeof(float));
-        *out_samples = copy_samples;
+    // ----------------------------------------------------
+    // Step 2: Variance 推論 (ピッチ・音素長予測)
+    // ----------------------------------------------------
+    int64_t *accent_buf = (int64_t *)ugjy_arena_alloc(arena, L * sizeof(int64_t));
+    if (!accent_buf) { ret_code = -20; goto cleanup; }
+    if (req->prosody_features) {
+        memcpy(accent_buf, req->prosody_features, L * sizeof(int64_t));
+    } else {
+        for (size_t i = 0; i < L; i++) accent_buf[i] = 4; // デフォルト: _ (変化なし)
     }
-    model->onnx.api->ReleaseValue(output_tensors[0]);
 
-    cleanup:
-        // 生成されたテンソルを解放
-        for (size_t i = 0; i < num_allocated; i++) {
-            if (allocated_tensors[i]) {
-                model->onnx.api->ReleaseValue(allocated_tensors[i]);
+    int64_t *spk_buf = (int64_t *)ugjy_arena_alloc(arena, sizeof(int64_t));
+    *spk_buf = speaker_id;
+    int64_t shape_1[1] = {1};
+
+    OrtValue *t_var_phonemes = ugjy_onnx_create_tensor(&model->variance, phoneme_buf, L * sizeof(int64_t), shape_L, 2, ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64);
+    OrtValue *t_var_accents  = ugjy_onnx_create_tensor(&model->variance, accent_buf, L * sizeof(int64_t), shape_L, 2, ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64);
+    OrtValue *t_var_speaker  = ugjy_onnx_create_tensor(&model->variance, spk_buf, sizeof(int64_t), shape_1, 1, ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64);
+
+    const char *var_in_names[] = {"phonemes", "accents", "speakers"};
+    const OrtValue *var_in_tensors[] = {t_var_phonemes, t_var_accents, t_var_speaker};
+    const char *var_out_names[] = {"pitches", "durations"};
+    OrtValue *var_out_tensors[2] = {NULL, NULL};
+
+    int var_ret = ugjy_onnx_run(&model->variance, var_in_names, var_in_tensors, 3, var_out_names, 2, var_out_tensors);
+    model->variance.api->ReleaseValue(t_var_phonemes);
+    model->variance.api->ReleaseValue(t_var_accents);
+    model->variance.api->ReleaseValue(t_var_speaker);
+
+    if (var_ret != 0 || !var_out_tensors[0] || !var_out_tensors[1]) {
+        model->embedder.api->ReleaseValue(emb_out_tensors[0]);
+        model->embedder.api->ReleaseValue(t_phonemes);
+        ret_code = -21;
+        goto cleanup;
+    }
+
+    float *pitches = NULL;
+    float *durations = NULL;
+    ORT_CHECK(model->variance.api, model->variance.api->GetTensorMutableData(var_out_tensors[0], (void **)&pitches));
+    ORT_CHECK(model->variance.api, model->variance.api->GetTensorMutableData(var_out_tensors[1], (void **)&durations));
+
+    // 無声音のピッチをゼロクリア
+    for (size_t i = 0; i < L; i++) {
+        if (is_unvoiced_phoneme(req->tokens[i])) {
+            pitches[i] = 0.0f;
+        }
+    }
+
+    // ----------------------------------------------------
+    // Step 3: Length Regulator (ゼロアロケーション・フレーム伸張)
+    // ----------------------------------------------------
+    const float regulation_base = 93.75f; // 48000Hz / 512hop = 93.75
+    size_t total_frames = 0;
+    int *frame_counts = (int *)ugjy_arena_alloc(arena, L * sizeof(int));
+    if (!frame_counts) { ret_code = -30; goto cleanup; }
+
+    for (size_t i = 0; i < L; i++) {
+        float dur_sec = durations[i] / speed;
+        // 句読点（、や！、。）のポーズをしっかり確保
+        if (req->tokens[i] == 0) {
+            if (i > 0 && i + 1 < L) {
+                if (dur_sec < 0.22f) dur_sec = 0.22f; // 中間の句読点ポーズ (約20フレーム = 0.22秒)
+            } else if (i == 0) {
+                if (dur_sec < 0.08f) dur_sec = 0.08f; // 文頭の微小ポーズ
+            } else {
+                if (dur_sec < 0.15f) dur_sec = 0.18f; // 文末の余韻ポーズ
             }
         }
-        // アリーナをしおりまで巻き戻す
-        ugjy_arena_restore(arena, arena_marker);
-        return ret_code;
+        int frames = (int)roundf(dur_sec * regulation_base);
+        if (frames < 1 && req->tokens[i] != 0) {
+            frames = 1; // pause 以外は最低1フレーム保証
+        }
+        if (frames < 0) frames = 0;
+        frame_counts[i] = frames;
+        total_frames += frames;
+    }
+
+    if (total_frames == 0) total_frames = 1;
+
+    // 伸張バッファをアリーナから確保
+    float *lr_features = (float *)ugjy_arena_alloc(arena, total_frames * 192 * sizeof(float));
+    float *lr_pitches  = (float *)ugjy_arena_alloc(arena, total_frames * sizeof(float));
+    if (!lr_features || !lr_pitches) { ret_code = -31; goto cleanup; }
+
+    size_t curr_frame = 0;
+    for (size_t i = 0; i < L; i++) {
+        int cnt = frame_counts[i];
+        const float *src_feat = feature_embedded + (i * 192);
+        float p = pitches[i];
+
+        for (int f = 0; f < cnt; f++) {
+            memcpy(lr_features + (curr_frame * 192), src_feat, 192 * sizeof(float));
+            lr_pitches[curr_frame] = p;
+            curr_frame++;
+        }
+    }
+
+    // ----------------------------------------------------
+    // 1. 声帯の慣性平滑化（カクつき・詰まり音の解消）
+    // ----------------------------------------------------
+    float *temp_pitches = (float *)ugjy_arena_alloc(arena, total_frames * sizeof(float));
+    if (temp_pitches) {
+        for (int pass = 0; pass < 2; pass++) {
+            const float *src = (pass == 0) ? lr_pitches : temp_pitches;
+            float *dst = (pass == 0) ? temp_pitches : lr_pitches;
+            for (size_t f = 0; f < total_frames; f++) {
+                if (src[f] <= 0.0f) {
+                    dst[f] = 0.0f;
+                    continue;
+                }
+                float prev = (f > 0 && src[f - 1] > 0.0f) ? src[f - 1] : src[f];
+                float next = (f + 1 < total_frames && src[f + 1] > 0.0f) ? src[f + 1] : src[f];
+                dst[f] = 0.25f * prev + 0.50f * src[f] + 0.25f * next;
+            }
+        }
+    }
+
+    // ----------------------------------------------------
+    // 2. 対数F0マイクロダイナミクス（過度平滑化の解消・抑揚ブースト）
+    // ----------------------------------------------------
+    float f0_sum = 0.0f;
+    size_t voiced_count = 0;
+    for (size_t f = 0; f < total_frames; f++) {
+        if (lr_pitches[f] > 0.0f) {
+            f0_sum += lr_pitches[f];
+            voiced_count++;
+        }
+    }
+    if (voiced_count > 0) {
+        float mean_log_f0 = f0_sum / (float)voiced_count;
+        const float intonation_scale = 1.15f; // 1.12〜1.18 が黄金比
+        for (size_t f = 0; f < total_frames; f++) {
+            if (lr_pitches[f] > 0.0f) {
+                lr_pitches[f] = mean_log_f0 + (lr_pitches[f] - mean_log_f0) * intonation_scale;
+            }
+        }
+    }
+
+    // Embedder と Variance のテンソルを解放
+    model->embedder.api->ReleaseValue(emb_out_tensors[0]);
+    model->embedder.api->ReleaseValue(t_phonemes);
+    model->variance.api->ReleaseValue(var_out_tensors[0]);
+    model->variance.api->ReleaseValue(var_out_tensors[1]);
+
+    // ----------------------------------------------------
+    // Step 4: Decoder 推論 (24kHz HiFi-GAN 波形生成)
+    // ----------------------------------------------------
+    int64_t shape_dec_feat[3] = {1, (int64_t)total_frames, 192};
+    int64_t shape_dec_pitch[2] = {1, (int64_t)total_frames};
+
+    OrtValue *t_dec_features = ugjy_onnx_create_tensor(&model->decoder, lr_features, total_frames * 192 * sizeof(float), shape_dec_feat, 3, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT);
+    OrtValue *t_dec_pitches  = ugjy_onnx_create_tensor(&model->decoder, lr_pitches, total_frames * sizeof(float), shape_dec_pitch, 2, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT);
+    OrtValue *t_dec_speaker  = ugjy_onnx_create_tensor(&model->decoder, spk_buf, sizeof(int64_t), shape_1, 1, ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64);
+
+    const char *dec_in_names[] = {"length_regulated_tensor", "pitches", "speakers"};
+    const OrtValue *dec_in_tensors[] = {t_dec_features, t_dec_pitches, t_dec_speaker};
+    const char *dec_out_names[] = {"wav"};
+    OrtValue *dec_out_tensors[1] = {NULL};
+
+    int dec_ret = ugjy_onnx_run(&model->decoder, dec_in_names, dec_in_tensors, 3, dec_out_names, 1, dec_out_tensors);
+    model->decoder.api->ReleaseValue(t_dec_features);
+    model->decoder.api->ReleaseValue(t_dec_pitches);
+    model->decoder.api->ReleaseValue(t_dec_speaker);
+
+    if (dec_ret != 0 || !dec_out_tensors[0]) {
+        ret_code = -40;
+        goto cleanup;
+    }
+
+    float *wav_data = NULL;
+    ORT_CHECK(model->decoder.api, model->decoder.api->GetTensorMutableData(dec_out_tensors[0], (void **)&wav_data));
+    OrtTensorTypeAndShapeInfo *shape_info = NULL;
+    ORT_CHECK(model->decoder.api, model->decoder.api->GetTensorTypeAndShape(dec_out_tensors[0], &shape_info));
+    size_t num_wav_samples = 0;
+    ORT_CHECK(model->decoder.api, model->decoder.api->GetTensorShapeElementCount(shape_info, &num_wav_samples));
+    model->decoder.api->ReleaseTensorTypeAndShapeInfo(shape_info);
+
+    // ----------------------------------------------------
+    // Step 5: ピーク正規化 (0.95) & 出力コピー
+    // ----------------------------------------------------
+    size_t copy_samples = (num_wav_samples > max_samples) ? max_samples : num_wav_samples;
+    if (wav_data && copy_samples > 0) {
+        float max_abs = 0.001f;
+        for (size_t i = 0; i < copy_samples; i++) {
+            float a = fabsf(wav_data[i]);
+            if (a > max_abs) max_abs = a;
+        }
+        float scale = (max_abs > 0.95f) ? (0.95f / max_abs) : 1.0f;
+        for (size_t i = 0; i < copy_samples; i++) {
+            out_pcm[i] = wav_data[i] * scale;
+        }
+        size_t fade_len = 480;
+        if (copy_samples > fade_len) {
+            for (size_t k = 0; k < fade_len; k++) {
+                size_t idx = copy_samples - fade_len + k;
+                float w = 0.5f * (1.0f + cosf(3.14159265f * (float)k / (float)fade_len));
+                out_pcm[idx] *= w;
+            }
+        }
+        *out_samples = copy_samples;
+    }
+
+    model->decoder.api->ReleaseValue(dec_out_tensors[0]);
+
+cleanup:
+    ugjy_arena_restore(arena, arena_marker);
+    return ret_code;
 }

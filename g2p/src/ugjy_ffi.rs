@@ -6,15 +6,17 @@ use std::panic::AssertUnwindSafe;
 use std::ptr;
 
 use crate::encode::{PiperEncoder, UnknownTokenMode};
-use crate::phonemizer::PhonemizerRegistry;
+use crate::japanese::JapanesePhonemizer;
+use crate::phonemizer::Phonemizer;
 
 /// C側に不透明ポインタとして渡すハンドル
 pub struct UgjyG2p {
-    registry: PhonemizerRegistry,
-    encoder: PiperEncoder,
+    ja_phonemizer: Option<JapanesePhonemizer>,
+    encoder: Option<PiperEncoder>,
+    is_sharevox: bool,
 }
 
-/// config.jsonを読み込んでG2Pインスタンスを作成
+/// config.json (または model_config.json) を読み込んでG2Pインスタンスを作成
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ugjy_g2p_create(
     config_path: *const c_char,
@@ -24,13 +26,38 @@ pub unsafe extern "C" fn ugjy_g2p_create(
     }
 
     let result = std::panic::catch_unwind(|| {
-        let config_str = unsafe { CStr::from_ptr(config_path)}.to_str().ok()?;
+        let config_str = unsafe { CStr::from_ptr(config_path) }.to_str().ok()?;
 
-        // config.jsonを読み込む
+        let mut ja_phonemizer = None;
+        #[cfg(feature = "naist-jdic")]
+        {
+            if let Ok(ja) = JapanesePhonemizer::new_bundled() {
+                ja_phonemizer = Some(ja);
+            }
+        }
+
+        // ツクヨミちゃん (SHAREVOX) モデルの判定
+        if config_str.contains("tsukuyomi") || config_str.contains("sharevox") {
+            return Some(Box::into_raw(Box::new(UgjyG2p {
+                ja_phonemizer,
+                encoder: None,
+                is_sharevox: true,
+            })));
+        }
+
+        // 既存のPiperモデル用の読み込み処理
         let mut f = std::fs::File::open(config_str).ok()?;
         let mut content = String::new();
         f.read_to_string(&mut content).ok()?;
         let json: serde_json::Value = serde_json::from_str(&content).ok()?;
+
+        if json.get("synthesis_system").is_some() {
+            return Some(Box::into_raw(Box::new(UgjyG2p {
+                ja_phonemizer,
+                encoder: None,
+                is_sharevox: true,
+            })));
+        }
 
         let id_map_json = json.get("phoneme_id_map")?.as_object()?;
         let mut id_map = HashMap::new();
@@ -41,91 +68,76 @@ pub unsafe extern "C" fn ugjy_g2p_create(
             }
         }
 
-        let encoder = PiperEncoder::new(
-            id_map,
-            UnknownTokenMode::Skip,
-        ).ok()?;
-        let mut registry = PhonemizerRegistry::new();
-
-        // 日本語
-        #[cfg(feature = "naist-jdic")]
-        if let Ok(ja) = 
-            crate::japanese::JapanesePhonemizer::new_bundled() {
-            registry.register("ja", Box::new(ja));
-        }
-
-        // 英語
-        #[cfg(all(feature = "english", feature = "bundled-dicts"))]
-        if let Ok(en) = crate::english::EnglishPhonemizer::new_bundled() {
-            registry.register("en", Box::new(en));
-        }
-        #[cfg(all(feature = "english", not(feature = "bundled-dicts")))]
-        if let Ok(en) = crate::english::EnglishPhonemizer::new() {
-            registry.register("en", Box::new(en));
-        }
-        Some(Box::into_raw(Box::new(UgjyG2p { registry, encoder })))
+        let encoder = PiperEncoder::new(id_map, UnknownTokenMode::Skip).ok()?;
+        Some(Box::into_raw(Box::new(UgjyG2p {
+            ja_phonemizer,
+            encoder: Some(encoder),
+            is_sharevox: false,
+        })))
     });
 
     result.unwrap_or(None).unwrap_or(ptr::null_mut())
 }
 
-/// テキストからトークン列と韻律特徴量を一括生成し、Cバッファに直接書き込み
+/// テキストからトークン列とアクセント/韻律特徴量を生成し、Cバッファに直接書き込み
 /// 0: 成功, 負数: 失敗
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ugjy_g2p_convert(
     g2p: *mut UgjyG2p,
     text: *const c_char,
-    lang: *const c_char,
+    _lang: *const c_char,
     out_tokens: *mut i64,
     out_prosody: *mut i64,
     max_tokens: usize,
-    out_num_tokens: *mut usize
+    out_num_tokens: *mut usize,
 ) -> i32 {
     if g2p.is_null() || text.is_null() || out_tokens.is_null() || out_num_tokens.is_null() {
-        return -1; // 引数が不正
+        return -1;
     }
 
     let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
         let g = unsafe { &*g2p };
         let text_str = unsafe { CStr::from_ptr(text) }.to_str().ok()?;
-        let lang_str = if lang.is_null() {
-            "ja" // デフォルトは日本語
-        } else {
-            unsafe { CStr::from_ptr(lang) }.to_str().ok()?
-        };
 
-        let phonemizer = g.registry.get(lang_str)?;
+        if g.is_sharevox {
+            let ja = g.ja_phonemizer.as_ref()?;
+            let labels = ja.extract_labels(text_str).ok()?;
+            let (phoneme_ids, accent_ids) = crate::sharevox::extract_sharevox_features(&labels);
 
-        // テキスト->音素数・韻律情報
-        let (tokens, prosody) = phonemizer.phonemize_with_prosody(text_str).ok()?;
+            if phoneme_ids.len() > max_tokens {
+                return None;
+            }
 
-        // 音素列->トークンID列
-        let (ids, pros_feats) = g.encoder.encode_with_prosody(&tokens, &prosody).ok()?;
+            unsafe {
+                ptr::copy_nonoverlapping(phoneme_ids.as_ptr(), out_tokens, phoneme_ids.len());
+                if !out_prosody.is_null() {
+                    ptr::copy_nonoverlapping(accent_ids.as_ptr(), out_prosody, accent_ids.len());
+                }
+                *out_num_tokens = phoneme_ids.len();
+            }
+            return Some(0);
+        }
+
+        // Piper用フォールバック
+        let ja = g.ja_phonemizer.as_ref()?;
+        let encoder = g.encoder.as_ref()?;
+        let (tokens, prosody) = ja.phonemize_with_prosody(text_str).ok()?;
+        let (ids, _) = encoder.encode_with_prosody_and_eos(&tokens, &prosody, None).ok()?;
 
         if ids.len() > max_tokens {
-            return None; // バッファが足りない
+            return None;
         }
 
         unsafe {
-            // トークンID列をCバッファにコピー
             ptr::copy_nonoverlapping(ids.as_ptr(), out_tokens, ids.len());
-
-            // 韻律特徴量もコピー
-            if !out_prosody.is_null() {
-                for (i, feat) in pros_feats.iter().enumerate() {
-                    *out_prosody.add(i * 3 + 0) = feat[0] as i64;
-                    *out_prosody.add(i * 3 + 1) = feat[1] as i64;
-                    *out_prosody.add(i * 3 + 2) = feat[2] as i64;
-                }
-            }
             *out_num_tokens = ids.len();
         }
-        Some(0) // 成功
+        Some(0)
     }));
 
     match result {
         Ok(Some(code)) => code,
-        _ => -2, // 内部エラー
+        _ => -2,
     }
 }
 
@@ -134,7 +146,7 @@ pub unsafe extern "C" fn ugjy_g2p_convert(
 pub unsafe extern "C" fn ugjy_g2p_destroy(g2p: *mut UgjyG2p) {
     if !g2p.is_null() {
         unsafe {
-            drop(Box::from_raw(g2p)); // Boxを解放してメモリを返す
+            drop(Box::from_raw(g2p));
         }
     }
 }

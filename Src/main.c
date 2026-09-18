@@ -5,7 +5,7 @@
 
 static uint8_t g_memory_pool[64 * 1024 * 1024]; // 64MB アリーナ
 
-// 高精度ミリ秒タイマー (所要時間計測用)
+// 高精度ミリ秒タイマー (所要時間・RTF計測用)
 static double get_time_ms(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -14,21 +14,21 @@ static double get_time_ms(void) {
 
 int main(void) {
     printf("========================================\n");
-    printf("  ugjy 自動G2P＋音声合成テスト (つくよみちゃん)\n");
+    printf("  ugjy 高性能ツクヨミちゃん 48kHz 音声合成テスト\n");
     printf("========================================\n");
 
-    const char *model_path = "models/tsukuyomi-chan-6lang-fp16.onnx";
-    const char *config_path = "models/config.json";
+    const char *model_dir = "models/tsukuyomi-v3-1";
+    const char *config_path = "models/tsukuyomi-v3-1/model_config.json";
 
-    // 音声合成エンジンの初期化
-    printf("モデル読み込み中: %s\n", model_path);
-    ugjy_context_t *ctx = ugjy_init(model_path, g_memory_pool, sizeof(g_memory_pool));
+    // 1. 音声合成エンジンの初期化 (embedder, variance, decoder)
+    printf("モデル読み込み中: %s\n", model_dir);
+    ugjy_context_t *ctx = ugjy_init(model_dir, g_memory_pool, sizeof(g_memory_pool));
     if (!ctx) {
         fprintf(stderr, "エンジン初期化エラー！\n");
         return 1;
     }
 
-    // G2P（形態素解析・音素・アクセント推定）エンジンの初期化
+    // 2. G2P（日本語形態素解析・音素・ピッチアクセント推定）の初期化
     printf("G2P辞書読み込み中: %s\n", config_path);
     ugjy_g2p_t *g2p = ugjy_g2p_create(config_path);
     if (!g2p) {
@@ -37,33 +37,32 @@ int main(void) {
         return 1;
     }
 
-    static float out_pcm[22050 * 30]; // 最大30秒分
+    int sample_rate = ugjy_get_sample_rate(ctx);
+    printf("出力サンプリングレート: %d Hz (HiFi-GAN)\n", sample_rate);
+
+    static float out_pcm[48000 * 30]; // 最大30秒分
     size_t out_samples = 0;
 
-    // テストケース (日本語と英語)
+    // ローカルAIの声帯として妥協のないテストケース
     struct {
         const char *text;
-        const char *lang;
         const char *filename;
         const char *desc;
     } test_cases[] = {
         {
-            "おはようございます！今日も一日、頑張りましょう。",
-            "ja",
-            "test_auto_ohayou.wav",
-            "【日本語】朝の挨拶"
+            "おはようございます！今日も一日、一緒に頑張りましょうね。",
+            "test_tsukuyomi_ohayou.wav",
+            "【挨拶】朝の明るい挨拶"
         },
         {
-            "ローカルAIの音声対話システム、爆速で完成しそうです！",
-            "ja",
-            "test_auto_local_ai.wav",
-            "【日本語】漢字・カタカナ混じり文"
+            "ローカルAIの音声対話システム、信じられないほど爆速で動いています！",
+            "test_tsukuyomi_local_ai.wav",
+            "【漢字・カタカナ】自然な日常会話調"
         },
         {
-            "Hello world! I can speak English now. Nice to meet you!",
-            "en",
-            "test_auto_english.wav",
-            "【英語】ツクヨミちゃん英語発声"
+            "私はツクヨミちゃんです。声の音質やイントネーションはいかがでしょうか？",
+            "test_tsukuyomi_self_intro.wav",
+            "【自己紹介・疑問文】自然な抑揚とピッチの検証"
         },
     };
 
@@ -72,14 +71,13 @@ int main(void) {
         printf("\n[%d/%d] %s\n", i + 1, num_tests, test_cases[i].desc);
         printf("  テキスト: \"%s\"\n", test_cases[i].text);
 
-        // G2P + ONNX推論の合計時間を計測
         double t0 = get_time_ms();
         int ret = ugjy_synthesize_text(
             ctx,
             g2p,
             test_cases[i].text,
-            test_cases[i].lang,
-            NULL, // デフォルトパラメータ使用
+            "ja",
+            NULL, // デフォルトパラメータ (話者ID: 4 つくよみちゃん)
             out_pcm,
             sizeof(out_pcm) / sizeof(out_pcm[0]),
             &out_samples
@@ -87,12 +85,12 @@ int main(void) {
         double t1 = get_time_ms();
 
         if (ret == 0 && out_samples > 0) {
-            ugjy_write_wav(test_cases[i].filename, out_pcm, out_samples, 22050);
-            double audio_sec = (double)out_samples / 22050.0;
+            ugjy_write_wav(test_cases[i].filename, out_pcm, out_samples, sample_rate);
+            double audio_sec = (double)out_samples / (double)sample_rate;
             double elapsed_ms = t1 - t0;
             double rtf = (elapsed_ms / 1000.0) / audio_sec;
 
-            printf("  保存完了: %s (%.3f 秒)\n", test_cases[i].filename, audio_sec);
+            printf("  保存完了: %s (%.3f 秒 @ %dHz)\n", test_cases[i].filename, audio_sec, sample_rate);
             printf("  処理時間: %.2f ms (RTF: %.3f -> 実時間の %.1f 倍速)\n",
                    elapsed_ms, rtf, 1.0 / rtf);
         } else {
@@ -101,7 +99,7 @@ int main(void) {
     }
 
     printf("\n========================================\n");
-    printf("全テスト完了\n");
+    printf("全テスト完了！\n");
 
     ugjy_g2p_destroy(g2p);
     ugjy_destroy(ctx);

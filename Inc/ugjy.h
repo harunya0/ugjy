@@ -70,6 +70,9 @@ size_t ugjy_get_required_memory(const char* model_path);
 // モデルに含まれる話者数を取得
 uint32_t ugjy_get_num_speakers(ugjy_context_t* ctx);
 
+// モデルのサンプリングレートを取得 (24000Hz)
+int ugjy_get_sample_rate(ugjy_context_t* ctx);
+
 // float の PCM 配列を 16-bit PCM WAV ファイルとして保存
 int ugjy_write_wav(
     const char  *filepath,

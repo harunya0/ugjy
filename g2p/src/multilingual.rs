@@ -723,7 +723,7 @@ impl Phonemizer for MultilingualPhonemizer {
         #[cfg(feature = "chinese")]
         let has_zh_segment = segments.iter().any(|(lang, _)| lang == "zh");
 
-        for (#[allow(unused_variables)] i, (lang, seg_text)) in segments.iter().enumerate() {
+        for (_i, (lang, seg_text)) in segments.iter().enumerate() {
             // ZH-EN code-switching: route embedded en (with adjacent zh) through
             // chinese loanword phonemizer. Issue #384, design §2.1.
             #[cfg(feature = "chinese")]

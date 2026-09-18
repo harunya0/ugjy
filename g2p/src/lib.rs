@@ -77,5 +77,7 @@ pub use encode::{PiperEncoder, UnknownTokenMode};
 pub use error::G2pError;
 pub use phonemizer::{PhonemeIdMap, Phonemizer, PhonemizerRegistry, ProsodyFeature, ProsodyInfo};
 
+pub mod sharevox;
+
 pub mod ugjy_ffi;
 pub use ugjy_ffi::*;

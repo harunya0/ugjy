@@ -433,7 +433,7 @@ impl JapanesePhonemizer {
 
     /// Extract fullcontext labels from text using jpreprocess,
     /// returning them as string representations for regex-based parsing.
-    fn extract_labels(&self, text: &str) -> Result<Vec<String>, G2pError> {
+    pub fn extract_labels(&self, text: &str) -> Result<Vec<String>, G2pError> {
         let labels = self
             .njd
             .extract_fullcontext(text)

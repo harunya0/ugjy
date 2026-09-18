@@ -58,15 +58,8 @@ int ugjy_synthesize(
         .tokens           = tokens,
         .num_tokens       = num_tokens,
         .speaker_id       = p.speaker_id,
-        .language_id      = p.language_id,
-        .speed            = p.speed,
-        .noise_scale      = (p.noise_scale > 0.0f) ? p.noise_scale : 0.4f,
-        .noise_scale_w    = (p.noise_scale_w > 0.0f) ? p.noise_scale_w : 0.6f,
         .prosody_features = p.prosody_features,
-        .f0_sequence      = NULL, // 通常TTS
-        .f0_length        = 0,
-        .durations        = NULL,
-        .durations_length = 0
+        .speed            = (p.speed > 0.0f) ? p.speed : 1.0f
     };
     return ugjy_model_infer(
         &ctx->model,
@@ -84,7 +77,12 @@ size_t ugjy_get_required_memory(const char *model_path) {
 }
 
 uint32_t ugjy_get_num_speakers(ugjy_context_t *ctx) {
-    return ctx ? ctx->model.num_speakers : 0;
+    (void)ctx;
+    return 5;  // 小春音アミ 0..3, つくよみちゃん 4
+}
+
+int ugjy_get_sample_rate(ugjy_context_t *ctx) {
+    return ctx ? (int)ctx->model.sample_rate : 24000;
 }
 
 int ugjy_write_wav(
