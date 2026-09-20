@@ -41,7 +41,7 @@ static RE_A1: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"/A:([0-9\-]+)\+").
 static RE_A2: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\+(\d+)\+").unwrap());
 static RE_A3: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\+(\d+)/").unwrap());
 static RE_F1: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"/F:(\d+)_").unwrap());
-static RE_F3: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"#(\d+)_").unwrap());
+static RE_F3: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"#(\d+)[@_]").unwrap());
 
 #[inline]
 fn numeric_feature(re: &Regex, s: &str) -> i32 {
@@ -92,9 +92,15 @@ pub fn extract_sharevox_features(labels: &[String]) -> (Vec<i64>, Vec<i64>) {
             -50
         };
 
+        let next_is_pau = if n + 1 < n_labels {
+            labels[n + 1].contains("-pau+")
+        } else {
+            false
+        };
+
         // 3. アクセント記号の厳密判定 (公式コード完全移植)
         // ① アクセント句境界 または 文末
-        if (a3 == 1 && a2_next == 1) || n == n_labels - 2 {
+        if (a3 == 1 && (a2_next == 1 || next_is_pau)) || n == n_labels - 2 {
             let f3 = numeric_feature(&RE_F3, lab_curr);
             if f3 == 1 {
                 accent_strs.push("?".to_string()); // 疑問文末尾

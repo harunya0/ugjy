@@ -165,7 +165,7 @@ int ugjy_model_infer(
     // Step 3: Length Regulator (ゼロアロケーション・フレーム伸張)
     // ----------------------------------------------------
     const float regulation_base = 93.75f; // 48000Hz / 512hop = 93.75
-    size_t total_frames = 0;
+    size_t total_frames = 4;
     int *frame_counts = (int *)ugjy_arena_alloc(arena, L * sizeof(int));
     if (!frame_counts) { ret_code = -30; goto cleanup; }
 
@@ -233,6 +233,10 @@ int ugjy_model_infer(
     // ----------------------------------------------------
     // 2. 対数F0マイクロダイナミクス（過度平滑化の解消・抑揚ブースト）
     // ----------------------------------------------------
+    const float pitch_shift      = -0.0f; // ピッチシフト (-0.058: 半音1つ下げ, -0.085: 落ち着いたお姉さん声)
+    const float intonation_scale = 1.0f;   // 抑揚ブースト (1.10〜1.18)
+    const float flutter_depth    = 0.0f;  // 揺らぎの深さ (0.010〜0.020: ほんのり自然な生っぽさ)
+
     float f0_sum = 0.0f;
     size_t voiced_count = 0;
     for (size_t f = 0; f < total_frames; f++) {
@@ -241,12 +245,25 @@ int ugjy_model_infer(
             voiced_count++;
         }
     }
+
     if (voiced_count > 0) {
         float mean_log_f0 = f0_sum / (float)voiced_count;
-        const float intonation_scale = 1.15f; // 1.12〜1.18 が黄金比
+        // 1/f ピンクノイズ生成器
+        uint32_t rng = 123456789;
+        float brownian = 0.0f;
         for (size_t f = 0; f < total_frames; f++) {
+            // 毎フレーム乱数を生成して、前回の値と滑らかにブレンド（遮断周波数 約5Hz）
+            rng = rng * 1664525u + 1013904223u;
+            float white = ((float)(rng & 0xFFFF) / 32768.0f) - 1.0f; // -1.0f 〜 +1.0f
+            brownian = 0.85f * brownian + 0.15f * white;
             if (lr_pitches[f] > 0.0f) {
-                lr_pitches[f] = mean_log_f0 + (lr_pitches[f] - mean_log_f0) * intonation_scale;
+                // 抑揚ブースト
+                float p = mean_log_f0 + (lr_pitches[f] - mean_log_f0) * intonation_scale;
+                // ピッチシフト（落ち着いた声へ下げる）
+                p += pitch_shift;
+                // 1/f 微細ピッチ揺らぎ
+                p += brownian * flutter_depth;
+                lr_pitches[f] = p;
             }
         }
     }
@@ -293,17 +310,48 @@ int ugjy_model_infer(
     // ----------------------------------------------------
     // Step 5: ピーク正規化 (0.95) & 出力コピー
     // ----------------------------------------------------
-    size_t copy_samples = (num_wav_samples > max_samples) ? max_samples : num_wav_samples;
+   size_t copy_samples = (num_wav_samples > max_samples) ? max_samples : num_wav_samples;
     if (wav_data && copy_samples > 0) {
+        // 1. まずバッファにコピー
+        for (size_t i = 0; i < copy_samples; i++) {
+            out_pcm[i] = wav_data[i];
+        }
+        // 2. 超低音カット (50Hz 1次ハイパスフィルター: DCオフセット・ボコつき除去)
+        // 48000Hz における 50Hz カットオフの係数
+        const float alpha_hp = 0.9935f;
+        float prev_x = out_pcm[0];
+        float prev_y = out_pcm[0];
+        for (size_t i = 0; i < copy_samples; i++) {
+            float x = out_pcm[i];
+            float y = alpha_hp * (prev_y + x - prev_x);
+            prev_x = x;
+            prev_y = y;
+            out_pcm[i] = y;
+        }
+        // 3. 超高音カット (12kHz 2次バターワース・ローパスフィルター: チリチリ・がびがび高周波ノイズ除去)
+        // 48000Hz / 4 = 12000Hz (Q = 0.7071) の完全最適化係数
+        const float b0 = 0.292893f, b1 = 0.585786f, b2 = 0.292893f;
+        const float a2 = 0.171573f; // a1 は数学的にジャスト 0
+        float x1 = 0.0f, x2 = 0.0f;
+        float y1 = 0.0f, y2 = 0.0f;
+        for (size_t i = 0; i < copy_samples; i++) {
+            float x0 = out_pcm[i];
+            float y0 = b0 * x0 + b1 * x1 + b2 * x2 - a2 * y2;
+            x2 = x1; x1 = x0;
+            y2 = y1; y1 = y0;
+            out_pcm[i] = y0;
+        }
+        // 4. ピーク正規化 (ノイズ除去後の綺麗な波形で 0.95 にスケール)
         float max_abs = 0.001f;
         for (size_t i = 0; i < copy_samples; i++) {
-            float a = fabsf(wav_data[i]);
+            float a = fabsf(out_pcm[i]);
             if (a > max_abs) max_abs = a;
         }
         float scale = (max_abs > 0.95f) ? (0.95f / max_abs) : 1.0f;
         for (size_t i = 0; i < copy_samples; i++) {
-            out_pcm[i] = wav_data[i] * scale;
+            out_pcm[i] *= scale;
         }
+        // 5. 末尾 10ms のコサインフェードアウト（ブツ切り防止）
         size_t fade_len = 480;
         if (copy_samples > fade_len) {
             for (size_t k = 0; k < fade_len; k++) {
@@ -313,7 +361,7 @@ int ugjy_model_infer(
             }
         }
         *out_samples = copy_samples;
-    }
+    } 
 
     model->decoder.api->ReleaseValue(dec_out_tensors[0]);
 
