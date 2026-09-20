@@ -59,7 +59,8 @@ int ugjy_synthesize(
         .num_tokens       = num_tokens,
         .speaker_id       = p.speaker_id,
         .prosody_features = p.prosody_features,
-        .speed            = (p.speed > 0.0f) ? p.speed : 1.0f
+        .speed            = (p.speed > 0.0f) ? p.speed : 1.0f,
+        .emotion          = p.emotion
     };
     return ugjy_model_infer(
         &ctx->model,
@@ -172,6 +173,12 @@ int ugjy_synthesize_text(
 
     // ONNX 推論
     return ugjy_synthesize(ctx, tokens, num_tokens, &p, out_pcm, max_samples, out_samples);
+}
+
+const ugjy_viseme_t* ugjy_get_visemes(ugjy_context_t *ctx, size_t *out_count) {
+    if (!ctx) { if (out_count) *out_count = 0; return NULL; }
+    if (out_count) *out_count = ctx->model.num_visemes;
+    return ctx->model.visemes;
 }
 
 void ugjy_destroy(ugjy_context_t *ctx) {

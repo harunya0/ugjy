@@ -15,10 +15,13 @@ extern "C" {
 // user_data   : C# の GCHandle や Rust の Context ポインタ
 // 戻り値      : 0 なら継続、非ゼロなら中断（Abort）
 typedef int (*ugjy_pcm_chunk_cb_t)(
-    const float *pcm_chunk,
-    size_t       num_samples,
-    int          is_last,
-    void        *user_data
+    const char          *chunk_text,      // 今回のチャンクのテキスト（句読点まで）
+    const float         *pcm_chunk,
+    size_t               num_samples,
+    const ugjy_viseme_t *visemes,         // 口の形状データ（NULLなら無視）
+    size_t               num_visemes,     // visemes の要素数（0なら
+    int                  is_last,
+    void                *user_data
 );
 
 typedef struct ugjy_stream {

@@ -109,6 +109,23 @@ int ugjy_synthesize_text(
     size_t         *out_samples
 );
 
+// 機嫌・感情プリセット
+typedef enum {
+    UGJY_MOOD_NORMAL = 0, // 通常（おしとやか・落ち着いた標準）
+    UGJY_MOOD_HAPPY,      // 嬉しい・上機嫌（少し高め、抑揚アップ、弾む声）
+    UGJY_MOOD_ANGRY,      // 怒り・不機嫌（低め、抑揚鋭く、キビキビ）
+    UGJY_MOOD_SAD,        // 悲しい・落ち込み（低め、抑揚フラット、脱力感）
+    UGJY_MOOD_RELAXED,    // まったり・穏やか（落ち着いたトーン）
+} ugjy_mood_t;
+
+// 口の形状データ (Live2D ParamMouthOpenY / ParamMouthForm に 1:1 対応)
+typedef struct {
+    float mouth_open; // 0.0 (閉) 〜 1.0 (全開 'あ')
+    float mouth_form; // -1.0 ('う' すぼめ) 〜 0.0 (標準) 〜 +1.0 ('い' 笑顔/横開き)
+} ugjy_viseme_t;
+
+const ugjy_viseme_t* ugjy_get_visemes(ugjy_context_t *ctx, size_t *out_count);
+
 void ugjy_destroy(ugjy_context_t* ctx);
 
 #ifdef __cplusplus

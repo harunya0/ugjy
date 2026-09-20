@@ -6,6 +6,7 @@
 #include <stdbool.h>
 #include "ugjy_arena.h"
 #include "ugjy_onnx.h"
+#include "ugjy.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -18,6 +19,8 @@ typedef struct {
     ugjy_onnx_session_t decoder;        // 3. 24kHz波形生成デコーダー (decoder_model.onnx)
     uint32_t            sample_rate;    // 24000 Hz
     uint32_t            default_speaker;// 4 (つくよみちゃん「おしとやかv3」)
+    ugjy_viseme_t       visemes[2048];
+    size_t              num_visemes;
 } ugjy_model_t;
 
 // 推論リクエスト構造体
@@ -27,6 +30,7 @@ typedef struct {
     const int64_t *prosody_features;    // アクセントID列 (0..4)
     uint32_t       speaker_id;          // 話者ID (未指定時: 4)
     float          speed;               // 話速 (1.0 = 標準)
+    uint8_t        emotion;             // 感情プリセット
 } ugjy_model_request_t;
 
 // モデルディレクトリ（models/tsukuyomi-v3-1）から3モデルを初期化

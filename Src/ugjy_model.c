@@ -13,6 +13,33 @@
     } \
 } while (0)
 
+static inline void get_phoneme_viseme(int64_t token, float *open_y, float *form) {
+    switch (token) {
+        case 1:  // A
+        case 7:  // a
+            *open_y = 1.0f; *form = 0.0f; break;
+        case 3:  // I
+        case 21: // i
+            *open_y = 0.3f; *form = 1.0f; break;
+        case 6:  // U
+        case 40: // u
+            *open_y = 0.25f; *form = -1.0f; break;
+        case 2:  // E
+        case 14: // e
+            *open_y = 0.6f; *form = 0.5f; break;
+        case 5:  // O
+        case 30: // o
+            *open_y = 0.8f; *form = -0.6f; break;
+        case 4:  // N (ん)
+            *open_y = 0.1f; *form = 0.0f; break;
+        case 0:  // pau (ポーズ)
+        case 11: // cl (っ)
+            *open_y = 0.0f; *form = 0.0f; break;
+        default: // その他の子音
+            *open_y = 0.15f; *form = 0.0f; break;
+    }
+}
+
 int ugjy_model_load(
     ugjy_model_t *model,
     const char *model_dir,
@@ -198,17 +225,29 @@ int ugjy_model_infer(
     if (!lr_features || !lr_pitches) { ret_code = -31; goto cleanup; }
 
     size_t curr_frame = 0;
+    float smooth_open = 0.0f;
+    float smooth_form = 0.0f;
     for (size_t i = 0; i < L; i++) {
         int cnt = frame_counts[i];
         const float *src_feat = feature_embedded + (i * 192);
         float p = pitches[i];
-
+        // ★ 音素に対応する目標の口の形を取得
+        float target_open = 0.0f, target_form = 0.0f;
+        get_phoneme_viseme(req->tokens[i], &target_open, &target_form);
         for (int f = 0; f < cnt; f++) {
             memcpy(lr_features + (curr_frame * 192), src_feat, 192 * sizeof(float));
             lr_pitches[curr_frame] = p;
+            // ★ 指数移動平均で滑らかに遷移（Live2Dのカクつき防止）
+            smooth_open += 0.35f * (target_open - smooth_open);
+            smooth_form += 0.35f * (target_form - smooth_form);
+            if (curr_frame < 2048) {
+                model->visemes[curr_frame].mouth_open = smooth_open;
+                model->visemes[curr_frame].mouth_form = smooth_form;
+            }
             curr_frame++;
         }
     }
+    model->num_visemes = (curr_frame < 2048) ? curr_frame : 2048;
 
     // ----------------------------------------------------
     // 1. 声帯の慣性平滑化（カクつき・詰まり音の解消）
@@ -233,9 +272,32 @@ int ugjy_model_infer(
     // ----------------------------------------------------
     // 2. 対数F0マイクロダイナミクス（過度平滑化の解消・抑揚ブースト）
     // ----------------------------------------------------
-    const float pitch_shift      = -0.1f; // ピッチシフト (-0.058: 半音1つ下げ, -0.085: 落ち着いたお姉さん声)
-    const float intonation_scale = 0.95f;   // 抑揚ブースト (1.10〜1.18)
+    float pitch_shift      = -0.1f; // ピッチシフト (-0.058: 半音1つ下げ, -0.085: 落ち着いたお姉さん声)
+    float intonation_scale = 0.95f;   // 抑揚ブースト (1.10〜1.18)
     const float flutter_depth    = 0.008f;  // 揺らぎの深さ (0.010〜0.020: ほんのり自然な生っぽさ)
+
+    switch (req->emotion) {
+        case 1: // UGJY_MOOD_HAPPY: 嬉しい・上機嫌
+            pitch_shift = -0.06f;      // 少し高めで明るいトーン
+            intonation_scale = 1.10f;  // 抑揚を強調して声が弾む！
+            break;
+        case 2: // UGJY_MOOD_ANGRY: 怒り・不機嫌
+            pitch_shift = -0.10f;      // 低く引き締まったトーン
+            intonation_scale = 1.10f;  // 強いアタック
+            break;
+        case 3: // UGJY_MOOD_SAD: 悲しい・落ち込み
+            pitch_shift = -0.10f;      // トーンダウン
+            intonation_scale = 0.85f;  // 抑揚を抑えて平坦・脱力
+            break;
+        case 4: // UGJY_MOOD_RELAXED: まったり
+            pitch_shift = -0.09f;
+            intonation_scale = 0.98f;  // なだらかで穏やか
+            break;
+        default: // UGJY_MOOD_NORMAL
+            pitch_shift = -0.08f;
+            intonation_scale = 1.05f;
+            break;
+    }
 
     float f0_sum = 0.0f;
     size_t voiced_count = 0;

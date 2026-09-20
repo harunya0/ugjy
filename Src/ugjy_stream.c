@@ -7,6 +7,7 @@
 // 1チャンク（1句・最大8秒分）の一時PCMバッファ
 // 48000Hz * 8秒 = 384,000 サンプル (約1.5MB)
 static float g_stream_pcm_buf[48000 * 8];
+static ugjy_viseme_t g_stream_viseme_buf[2048];
 
 // UTF-8 の区切り文字を検出し、その「末尾のオフセット（バイト数）」を返す
 // 見つからない場合は 0 を返す
@@ -51,7 +52,7 @@ static int synthesize_and_emit(
 ) {
     if (!chunk_text || chunk_text[0] == '\0') {
         if (is_last) {
-            return stream->callback(NULL, 0, 1, stream->user_data);
+            return stream->callback(NULL, NULL, 0, NULL, 0, 1, stream->user_data);
         }
         return 0;
     }
@@ -70,7 +71,7 @@ static int synthesize_and_emit(
 
     if (ret != 0 || out_samples == 0) {
         if (is_last) {
-            return stream->callback(NULL, 0, 1, stream->user_data);
+            return stream->callback(NULL, NULL, 0, NULL, 0, 1, stream->user_data);
         }
         return ret;
     }
@@ -93,8 +94,23 @@ static int synthesize_and_emit(
         }
     }
 
+    // 1. 口パクデータの取得（推論で生成された分）
+    size_t num_visemes = 0;
+    const ugjy_viseme_t *v = ugjy_get_visemes(stream->ctx, &num_visemes);
+    if (v && num_visemes > 0) {
+        if (num_visemes > 2048) num_visemes = 2048;
+        memcpy(g_stream_viseme_buf, v, num_visemes * sizeof(ugjy_viseme_t));
+    }
+    // 2. 音声全体の長さ（out_samples）に合わせた総フレーム数を計算 (512サンプル = 1フレーム)
+    size_t total_visemes = out_samples / 512;
+    if (total_visemes > 2048) total_visemes = 2048;
+    // 3. 句読点ポーズ（無音）などで伸びた末尾の余白フレームは、口を閉じる (0.0f)
+    for (size_t k = num_visemes; k < total_visemes; k++) {
+        g_stream_viseme_buf[k].mouth_open = 0.0f;
+        g_stream_viseme_buf[k].mouth_form = 0.0f;
+    }
     stream->chunk_count++;
-    return stream->callback(g_stream_pcm_buf, out_samples, is_last, stream->user_data);
+    return stream->callback(chunk_text, g_stream_pcm_buf, out_samples, g_stream_viseme_buf, total_visemes, is_last, stream->user_data);
 }
 
 int ugjy_stream_init(
@@ -182,5 +198,5 @@ int ugjy_stream_flush(ugjy_stream_t *stream) {
         return synthesize_and_emit(stream, temp_buf, 1);
     }
     // バッファが空の場合、完了通知を送信
-    return stream->callback(NULL, 0, 1, stream->user_data);
+    return stream->callback(NULL, NULL, 0, NULL, 0, 1, stream->user_data);
 }
