@@ -233,9 +233,9 @@ int ugjy_model_infer(
     // ----------------------------------------------------
     // 2. 対数F0マイクロダイナミクス（過度平滑化の解消・抑揚ブースト）
     // ----------------------------------------------------
-    const float pitch_shift      = -0.0f; // ピッチシフト (-0.058: 半音1つ下げ, -0.085: 落ち着いたお姉さん声)
-    const float intonation_scale = 1.0f;   // 抑揚ブースト (1.10〜1.18)
-    const float flutter_depth    = 0.0f;  // 揺らぎの深さ (0.010〜0.020: ほんのり自然な生っぽさ)
+    const float pitch_shift      = -0.1f; // ピッチシフト (-0.058: 半音1つ下げ, -0.085: 落ち着いたお姉さん声)
+    const float intonation_scale = 0.95f;   // 抑揚ブースト (1.10〜1.18)
+    const float flutter_depth    = 0.008f;  // 揺らぎの深さ (0.010〜0.020: ほんのり自然な生っぽさ)
 
     float f0_sum = 0.0f;
     size_t voiced_count = 0;
