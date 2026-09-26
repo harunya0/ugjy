@@ -29,8 +29,16 @@ pub unsafe extern "C" fn ugjy_g2p_create(
         let config_str = unsafe { CStr::from_ptr(config_path) }.to_str().ok()?;
 
         let mut ja_phonemizer = None;
+        // 1. まず models/naist-jdic (または環境変数) の mmap ゼロコピー辞書を試行
+        let dict_path = std::path::Path::new("models/naist-jdic");
+        if dict_path.exists() {
+            if let Ok(ja) = JapanesePhonemizer::new_mmap(dict_path) {
+                ja_phonemizer = Some(ja);
+            }
+        }
+        // 2. mmap 辞書が読み込めなかった場合のみ、従来の bundled 版にフォールバック
         #[cfg(feature = "naist-jdic")]
-        {
+        if ja_phonemizer.is_none() {
             if let Ok(ja) = JapanesePhonemizer::new_bundled() {
                 ja_phonemizer = Some(ja);
             }

@@ -21,6 +21,9 @@
 
 use std::collections::HashSet;
 use std::sync::LazyLock;
+use memmap2::Mmap;
+use std::borrow::Cow;
+use std::path::Path;
 
 use regex::Regex;
 
@@ -335,6 +338,47 @@ pub struct JapanesePhonemizer {
 }
 
 impl JapanesePhonemizer {
+    /// mmap を利用したゼロアロケーション外部辞書ローダー (56MB のヒープ展開をゼロ化)
+    pub fn new_mmap(dict_dir: &Path) -> Result<Self, G2pError> {
+        let read_mmap = |filename: &str| -> Result<&'static [u8], G2pError> {
+            let path = dict_dir.join(filename);
+            let file = std::fs::File::open(&path).map_err(|e| G2pError::DictionaryLoad {
+                path: format!("{path:?}: {e}"),
+            })?;
+            let mmap = unsafe { Mmap::map(&file) }.map_err(|e| G2pError::DictionaryLoad {
+                path: format!("{path:?}: {e}"),
+            })?;
+            // プロセス生存期間中はリークさせて &'static [u8] として安全に借用
+            let leaked: &'static memmap2::Mmap = Box::leak(Box::new(mmap));
+            Ok(&leaked[..])
+        };
+        let da_data = read_mmap("dict.da")?;
+        let vals_data = read_mmap("dict.vals")?;
+        let cost_data = read_mmap("matrix.mtx")?;
+        let char_data = read_mmap("char_def.bin")?;
+        let unk_data = read_mmap("unk.bin")?;
+        let words_idx_data = read_mmap("dict.wordsidx")?;
+        let words_data = read_mmap("dict.words")?;
+        let prefix_dict = lindera_core::prefix_dict::PrefixDict::from_static_slice(da_data, vals_data);
+        let cost_matrix = lindera_core::connection::ConnectionCostMatrix::load_static(cost_data);
+        let char_definitions = lindera_core::character_definition::CharacterDefinitions::load(char_data)
+            .map_err(|e| G2pError::JPreprocessInit(e.to_string()))?;
+        let unknown_dictionary = lindera_core::unknown_dictionary::UnknownDictionary::load(unk_data)
+            .map_err(|e| G2pError::JPreprocessInit(e.to_string()))?;
+        let dictionary = jpreprocess::Dictionary {
+            dict: prefix_dict,
+            cost_matrix,
+            char_definitions,
+            unknown_dictionary,
+            words_idx_data: Cow::Borrowed(words_idx_data),
+            words_data: Cow::Borrowed(words_data),
+        };
+        let njd = jpreprocess::JPreprocess::with_dictionaries(dictionary, None);
+        Ok(Self {
+            njd,
+            dictionary: None,
+        })
+    }
     /// Create a new `JapanesePhonemizer` with the bundled NAIST-JDIC dictionary.
     ///
     /// Requires the `naist-jdic` feature flag.

@@ -272,8 +272,8 @@ int ugjy_model_infer(
     // ----------------------------------------------------
     // 2. 対数F0マイクロダイナミクス（過度平滑化の解消・抑揚ブースト）
     // ----------------------------------------------------
-    float pitch_shift      = -0.1f; // ピッチシフト (-0.058: 半音1つ下げ, -0.085: 落ち着いたお姉さん声)
-    float intonation_scale = 0.95f;   // 抑揚ブースト (1.10〜1.18)
+    float pitch_shift      = 0.0f;
+    float intonation_scale = 0.0f;
     const float flutter_depth    = 0.008f;  // 揺らぎの深さ (0.010〜0.020: ほんのり自然な生っぽさ)
 
     switch (req->emotion) {

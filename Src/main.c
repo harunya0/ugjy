@@ -91,8 +91,8 @@ int main(void) {
     printf("  ugjy リアルタイムTTS (全体総括アーキテクチャ)\n");
     printf("========================================================\n");
 
-    const char *model_dir = "models/tsukuyomi-v3-1";
-    const char *config_path = "models/tsukuyomi-v3-1/model_config.json";
+    const char *model_dir = "models/ugjy-v1";
+    const char *config_path = "models/ugjy-v1/model_config.json";
 
     // モデルとG2Pを一括初期化
     ugjy_context_t *ctx = ugjy_init(model_dir, config_path, g_memory_pool, sizeof(g_memory_pool));
@@ -108,6 +108,8 @@ int main(void) {
 
     // 音声パラメータ（機嫌: 上機嫌 HAPPY）
     ugjy_t params = UGJY_DEFAULT_PARAMS;
+    params.speaker_id = 0;
+    params.speed = 1.05f;
     params.emotion = UGJY_MOOD_HAPPY;
 
     // 非同期キュー発話エンジンを開始

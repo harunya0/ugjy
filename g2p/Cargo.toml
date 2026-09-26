@@ -33,3 +33,5 @@ quick-xml = "0.41"
 tracing = "0.1"
 jpreprocess = { version = "0.9", optional = true }
 bincode = { version = "1", optional = true }
+memmap2 = "0.9"
+lindera-core = "0.30"
