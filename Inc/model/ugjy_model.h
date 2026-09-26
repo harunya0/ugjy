@@ -31,6 +31,7 @@ typedef struct {
     uint32_t       speaker_id;          // 話者ID (未指定時: 4)
     float          speed;               // 話速 (1.0 = 標準)
     uint8_t        emotion;             // 感情プリセット
+    uint8_t        style;               // 発声スタイル (0=通常, 1=ささやき, 2=歌唱)
 } ugjy_model_request_t;
 
 // モデルディレクトリ（models/tsukuyomi-v3-1）から3モデルを初期化

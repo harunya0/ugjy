@@ -106,21 +106,23 @@ int main(void) {
         .ctx = ctx
     };
 
-    // 音声パラメータ（機嫌: 上機嫌 HAPPY）
+    // 1. 通常発話パラメータ（機嫌: 上機嫌 HAPPY, 話速: 1.05）
     ugjy_t params = UGJY_DEFAULT_PARAMS;
     params.speaker_id = 0;
     params.speed = 1.05f;
     params.emotion = UGJY_MOOD_HAPPY;
+    params.style = UGJY_STYLE_NORMAL;
 
     // 非同期キュー発話エンジンを開始
-    if (ugjy_start(ctx, &params, on_chunk, &app) != 0) {
-        fprintf(stderr, "ugjy_start に失敗しました\n");
+    int ret = ugjy_start(ctx, &params, on_chunk, &app);
+    if (ret != UGJY_OK) {
+        fprintf(stderr, "ugjy_start に失敗しました: [%d] %s\n", ret, ugjy_error_str(ret));
         if (app.audio_pipe) pclose(app.audio_pipe);
         ugjy_destroy(ctx);
         return 1;
     }
 
-    // 1. LLM トークンストリーム投入（句読点検知で自動キューイング＆非同期発声）
+    // LLM トークンストリーム投入（句読点検知で自動キューイング＆非同期発声）
     const char *tokens[] = {
         "こんにちは！",
         "私の", "名前は", "ツクヨミちゃんです！",
@@ -128,18 +130,32 @@ int main(void) {
     };
     int num_tokens = sizeof(tokens) / sizeof(tokens[0]);
 
-    printf("\n>>> トークンストリーム投入開始 <<<\n");
+    printf("\n>>> 通常発声: トークンストリーム投入開始 <<<\n");
     struct timespec token_delay = {.tv_sec = 0, .tv_nsec = 50000000}; // 50ms
     for (int i = 0; i < num_tokens; i++) {
         printf("  [Token] \"%s\"\n", tokens[i]);
-        ugjy_feed(ctx, tokens[i]);
+        int feed_ret = ugjy_feed(ctx, tokens[i]);
+        if (feed_ret != UGJY_OK) {
+            fprintf(stderr, "ugjy_feed エラー: [%d] %s\n", feed_ret, ugjy_error_str(feed_ret));
+        }
         nanosleep(&token_delay, NULL);
     }
     ugjy_flush(ctx);
 
     // 発話終了を待機
     ugjy_wait_idle(ctx);
-    printf("\n✨ すべての発話が正常に完了しました。\n");
+    printf("\n✨ 通常発話が完了しました。\n");
+
+    // 2. ささやき声 (ASMR / ウィスパー) のデモ
+    printf("\n>>> ささやき (ASMR / Whisper) 発声テスト <<<\n");
+    params.style = UGJY_STYLE_WHISPER;
+    params.speed = 0.95f;
+    ugjy_start(ctx, &params, on_chunk, &app);
+
+    ugjy_push(ctx, "内緒のお話だよ…");
+    ugjy_push(ctx, "今日も一日、本当にお疲れ様…ふふっ。");
+    ugjy_wait_idle(ctx);
+    printf("\n✨ ささやき発話が完了しました。\n");
 
     // クリーンアップ
     ugjy_destroy(ctx);

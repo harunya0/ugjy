@@ -29,10 +29,12 @@ typedef struct {
     pthread_cond_t   not_empty;
 } ugjy_fifo_t;
 
+#include "ugjy_error.h"
+
 void     ugjy_fifo_init(ugjy_fifo_t *f);
 void     ugjy_fifo_destroy(ugjy_fifo_t *f);
-bool     ugjy_fifo_push(ugjy_fifo_t *f, const char *item);
-bool     ugjy_fifo_pop(ugjy_fifo_t *f, char *out_item, uint32_t max_len, volatile bool *is_running);
+int      ugjy_fifo_push(ugjy_fifo_t *f, const char *item);
+int      ugjy_fifo_pop(ugjy_fifo_t *f, char *out_item, uint32_t max_len, volatile bool *is_running);
 uint32_t ugjy_fifo_clear(ugjy_fifo_t *f);
 uint32_t ugjy_fifo_count(ugjy_fifo_t *f);
 

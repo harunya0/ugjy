@@ -17,13 +17,13 @@ void ugjy_fifo_destroy(ugjy_fifo_t *f) {
 }
 
 // ビットマスク & 0x3F によるインデックス加算（除算・剰余 % なし）
-bool ugjy_fifo_push(ugjy_fifo_t *f, const char *item) {
-    if (!f || !item || item[0] == '\0') return false;
+int ugjy_fifo_push(ugjy_fifo_t *f, const char *item) {
+    if (!f || !item || item[0] == '\0') return UGJY_ERR_INVALID_ARG;
 
     pthread_mutex_lock(&f->mutex);
     if (f->count >= UGJY_FIFO_CAPACITY) {
         pthread_mutex_unlock(&f->mutex);
-        return false;
+        return UGJY_ERR_QUEUE_FULL;
     }
 
     strncpy(f->items[f->tail].data, item, UGJY_FIFO_ITEM_MAX_LEN - 1);
@@ -33,12 +33,12 @@ bool ugjy_fifo_push(ugjy_fifo_t *f, const char *item) {
 
     pthread_cond_signal(&f->not_empty);
     pthread_mutex_unlock(&f->mutex);
-    return true;
+    return UGJY_OK;
 }
 
 // 先頭から取り出して消去 (FIFO)
-bool ugjy_fifo_pop(ugjy_fifo_t *f, char *out_item, uint32_t max_len, volatile bool *is_running) {
-    if (!f || !out_item || max_len == 0) return false;
+int ugjy_fifo_pop(ugjy_fifo_t *f, char *out_item, uint32_t max_len, volatile bool *is_running) {
+    if (!f || !out_item || max_len == 0) return UGJY_ERR_INVALID_ARG;
 
     pthread_mutex_lock(&f->mutex);
     while (f->count == 0 && *is_running) {
@@ -47,7 +47,7 @@ bool ugjy_fifo_pop(ugjy_fifo_t *f, char *out_item, uint32_t max_len, volatile bo
 
     if (!*is_running && f->count == 0) {
         pthread_mutex_unlock(&f->mutex);
-        return false;
+        return UGJY_ERR_QUEUE_EMPTY;
     }
 
     strncpy(out_item, f->items[f->head].data, max_len - 1);
@@ -56,7 +56,7 @@ bool ugjy_fifo_pop(ugjy_fifo_t *f, char *out_item, uint32_t max_len, volatile bo
     f->count--;
 
     pthread_mutex_unlock(&f->mutex);
-    return true;
+    return UGJY_OK;
 }
 
 // キューの全消去 (O(1))

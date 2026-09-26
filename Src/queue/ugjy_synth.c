@@ -1,4 +1,5 @@
 #include "ugjy_synth.h"
+#include "ugjy_error.h"
 #include <string.h>
 
 void ugjy_synth_init(ugjy_synth_t *s, ugjy_context_t *ctx, const ugjy_t *params) {
@@ -18,7 +19,7 @@ int ugjy_synth_process(
     size_t         *out_num_visemes
 ) {
     if (!s || !s->ctx || !text || !out_pcm || !out_num_samples) {
-        return -1;
+        return UGJY_ERR_INVALID_ARG;
     }
 
     size_t samples = 0;
@@ -32,10 +33,10 @@ int ugjy_synth_process(
         &samples
     );
 
-    if (ret != 0 || samples == 0) {
+    if (ret != UGJY_OK || samples == 0) {
         *out_num_samples = 0;
         if (out_num_visemes) *out_num_visemes = 0;
-        return ret ? ret : -1;
+        return (ret != UGJY_OK) ? ret : UGJY_ERR_QUEUE_SYNTH;
     }
 
     // 口パク visemes 取得
@@ -74,5 +75,5 @@ int ugjy_synth_process(
 
     *out_num_samples = samples;
     if (out_num_visemes) *out_num_visemes = total_visemes;
-    return 0;
+    return UGJY_OK;
 }

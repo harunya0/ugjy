@@ -35,18 +35,20 @@ else()
     add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
-# Src 内のすべての .c ファイルを自動検出
-# CONFIGURE_DEPENDS を付けることで、新しい .c ファイルを追加した際に CMake が自動検知して再生成します
-file(GLOB SOURCES CONFIGURE_DEPENDS "Src/*.c")
+# Src 内のすべての .c ファイルを再帰的に自動検出
+file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS "Src/*.c")
 
 # 実行可能ファイルの定義
 add_executable(ugjy ${SOURCES})
 
 # インクルードパスの設定
-# - Inc: ugjy 自体のヘッダー
-# - Lib: 今後配置するサードパーティ製ライブラリのヘッダー（必要に応じてサブディレクトリも追加可能）
+# - Inc: ugjy 自体のヘッダー (core, model, queue サブディレクトリ含む)
+# - Lib: 外部ライブラリのヘッダー
 target_include_directories(ugjy PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/Inc
+    ${CMAKE_CURRENT_SOURCE_DIR}/Inc/core
+    ${CMAKE_CURRENT_SOURCE_DIR}/Inc/model
+    ${CMAKE_CURRENT_SOURCE_DIR}/Inc/queue
     ${CMAKE_CURRENT_SOURCE_DIR}/Lib
     ${CMAKE_CURRENT_SOURCE_DIR}/Lib/onnxruntime/include
 )

@@ -1,4 +1,5 @@
 #include "ugjy_wav.h"
+#include "ugjy_error.h"
 #include <stdio.h>
 
 void ugjy_wav_create_header(
@@ -51,17 +52,17 @@ int ugjy_wav_save(
     size_t num_samples,
     uint32_t sample_rate
 ) {
-    if (!filename || (!pcm && num_samples > 0)) return -1;
+    if (!filename || (!pcm && num_samples > 0)) return UGJY_ERR_INVALID_ARG;
 
     FILE *fp = fopen(filename, "wb");
-    if (!fp) return -2;
+    if (!fp) return UGJY_ERR_IO;
 
     // ヘッダを作成して書き込む
     uint8_t header[44];
     ugjy_wav_create_header(header, num_samples, sample_rate);
     if (fwrite(header, 1, 44, fp) != 44) {
         fclose(fp);
-        return -3;
+        return UGJY_ERR_IO;
     }
 
     #define CHUNK_SAMPLES 1024
@@ -85,7 +86,7 @@ int ugjy_wav_save(
 
         if (fwrite(chunk, sizeof(int16_t), batch, fp) != batch) {
             fclose(fp);
-            return -4;
+            return UGJY_ERR_IO;
         }
 
         remaining -= batch;
@@ -95,5 +96,5 @@ int ugjy_wav_save(
     #undef CHUNK_SAMPLES
 
     fclose(fp);
-    return 0;
+    return UGJY_OK;
 }

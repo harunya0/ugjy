@@ -1,6 +1,7 @@
 #ifndef UGJY_H
 #define UGJY_H
 
+#include "ugjy_error.h"
 #include "ugjy_g2p.h"
 #include <stdint.h>
 #include <stddef.h>
@@ -44,6 +45,13 @@ typedef struct {
     .reserved = {0}, \
     .prosody_features = NULL \
 })
+
+// 発声スタイル
+typedef enum {
+    UGJY_STYLE_NORMAL  = 0, // 通常会話
+    UGJY_STYLE_WHISPER = 1, // ささやき声 (ASMR / ウィスパー)
+    UGJY_STYLE_SINGING = 2, // 歌唱 (SVS)
+} ugjy_style_t;
 
 // 機嫌・感情プリセット
 typedef enum {

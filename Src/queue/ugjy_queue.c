@@ -1,4 +1,5 @@
 #include "ugjy_queue.h"
+#include "ugjy_error.h"
 #include "ugjy.h"
 #include <string.h>
 #include <time.h>
@@ -18,7 +19,7 @@ static void* queue_worker_thread(void *arg) {
     char text[UGJY_FIFO_ITEM_MAX_LEN];
 
     while (q->is_running) {
-        if (!ugjy_fifo_pop(&q->fifo, text, sizeof(text), &q->is_running)) break;
+        if (ugjy_fifo_pop(&q->fifo, text, sizeof(text), &q->is_running) != UGJY_OK) break;
 
         q->is_busy = true;
         if (q->is_interrupted) { q->is_busy = false; continue; }
@@ -28,7 +29,7 @@ static void* queue_worker_thread(void *arg) {
 
         size_t samples = 0, visemes = 0;
         int ret = ugjy_synth_process(&q->synth, text, g_queue_pcm, UGJY_SYNTH_MAX_SAMPLES, &samples, g_queue_visemes, UGJY_SYNTH_MAX_VISEMES, &visemes);
-        if (ret != 0 || samples == 0 || q->is_interrupted) { q->is_busy = false; continue; }
+        if (ret != UGJY_OK || samples == 0 || q->is_interrupted) { q->is_busy = false; continue; }
 
         q->is_speaking = true;
         if (q->callback) q->callback(text, g_queue_pcm, samples, g_queue_visemes, visemes, q->user_data);
@@ -41,7 +42,7 @@ static void* queue_worker_thread(void *arg) {
 }
 
 int ugjy_queue_init(ugjy_queue_t *q, ugjy_context_t *ctx, const ugjy_t *params, ugjy_speech_cb_t cb, void *user_data) {
-    if (!q || !ctx || !cb) return -1;
+    if (!q || !ctx || !cb) return UGJY_ERR_INVALID_ARG;
     memset(q, 0, sizeof(ugjy_queue_t));
     q->callback = cb;
     q->user_data = user_data;
@@ -52,7 +53,13 @@ int ugjy_queue_init(ugjy_queue_t *q, ugjy_context_t *ctx, const ugjy_t *params, 
     pthread_mutex_init(&q->splitter_mutex, NULL);
 
     q->is_running = true;
-    return pthread_create(&q->worker_thread, NULL, queue_worker_thread, q);
+    if (pthread_create(&q->worker_thread, NULL, queue_worker_thread, q) != 0) {
+        q->is_running = false;
+        ugjy_fifo_destroy(&q->fifo);
+        pthread_mutex_destroy(&q->splitter_mutex);
+        return UGJY_ERR_QUEUE_THREAD;
+    }
+    return UGJY_OK;
 }
 
 void ugjy_queue_destroy(ugjy_queue_t *q) {
@@ -70,25 +77,25 @@ void ugjy_queue_destroy(ugjy_queue_t *q) {
 }
 
 int ugjy_queue_feed(ugjy_queue_t *q, const char *token) {
-    if (!q || !token || token[0] == '\0') return 0;
+    if (!q || !token || token[0] == '\0') return UGJY_ERR_INVALID_ARG;
     pthread_mutex_lock(&q->splitter_mutex);
     ugjy_splitter_feed(&q->splitter, token);
     pthread_mutex_unlock(&q->splitter_mutex);
-    return 0;
+    return UGJY_OK;
 }
 
 int ugjy_queue_flush(ugjy_queue_t *q) {
-    if (!q) return -1;
+    if (!q) return UGJY_ERR_INVALID_ARG;
     pthread_mutex_lock(&q->splitter_mutex);
     ugjy_splitter_flush(&q->splitter);
     pthread_mutex_unlock(&q->splitter_mutex);
-    return 0;
+    return UGJY_OK;
 }
 
 int ugjy_queue_push(ugjy_queue_t *q, const char *sentence) {
-    if (!q || !sentence || sentence[0] == '\0') return -1;
+    if (!q || !sentence || sentence[0] == '\0') return UGJY_ERR_INVALID_ARG;
     q->is_interrupted = false;
-    return ugjy_fifo_push(&q->fifo, sentence) ? 0 : -1;
+    return ugjy_fifo_push(&q->fifo, sentence);
 }
 
 int ugjy_queue_stop(ugjy_queue_t *q) {

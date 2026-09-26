@@ -1,4 +1,5 @@
 #include "ugjy.h"
+#include "ugjy_error.h"
 #include "ugjy_arena.h"
 #include "ugjy_model.h"
 #include "ugjy_wav.h"
@@ -46,7 +47,7 @@ ugjy_context_t* ugjy_init(
     int threads = (cfg.num_threads > 0) ? (int)cfg.num_threads : 4;
 
     // モデルをロード
-    if (ugjy_model_load(&ctx->model, model_path, threads) != 0) {
+    if (ugjy_model_load(&ctx->model, model_path, threads) != UGJY_OK) {
         return NULL;
     }
 
@@ -91,7 +92,7 @@ int ugjy_start(
     ugjy_speech_cb_t  callback,
     void             *user_data
 ) {
-    if (!ctx || !callback) return -1;
+    if (!ctx || !callback) return UGJY_ERR_INVALID_ARG;
 
     // 既に起動中なら再初期化前に一旦破棄
     if (ctx->queue_active) {
@@ -100,24 +101,24 @@ int ugjy_start(
     }
 
     int ret = ugjy_queue_init(&ctx->queue, ctx, params, callback, user_data);
-    if (ret == 0) {
+    if (ret == UGJY_OK) {
         ctx->queue_active = true;
     }
     return ret;
 }
 
 int ugjy_feed(ugjy_context_t *ctx, const char *token) {
-    if (!ctx || !ctx->queue_active) return -1;
+    if (!ctx || !ctx->queue_active) return UGJY_ERR_INVALID_ARG;
     return ugjy_queue_feed(&ctx->queue, token);
 }
 
 int ugjy_flush(ugjy_context_t *ctx) {
-    if (!ctx || !ctx->queue_active) return -1;
+    if (!ctx || !ctx->queue_active) return UGJY_ERR_INVALID_ARG;
     return ugjy_queue_flush(&ctx->queue);
 }
 
 int ugjy_push(ugjy_context_t *ctx, const char *sentence) {
-    if (!ctx || !ctx->queue_active) return -1;
+    if (!ctx || !ctx->queue_active) return UGJY_ERR_INVALID_ARG;
     return ugjy_queue_push(&ctx->queue, sentence);
 }
 
@@ -161,7 +162,7 @@ int ugjy_synthesize_text(
     size_t         *out_samples
 ) {
     if (!ctx || !ctx->g2p || !text || !out_pcm || !out_samples) {
-        return -1;
+        return UGJY_ERR_INVALID_ARG;
     }
 
     int64_t tokens[512];
@@ -169,8 +170,11 @@ int ugjy_synthesize_text(
     size_t num_tokens = 0;
 
     int ret = ugjy_g2p_convert(ctx->g2p, text, lang ? lang : "ja", tokens, prosody, 512, &num_tokens);
-    if (ret != 0 || num_tokens == 0) {
-        return ret ? ret : -2;
+    if (ret != 0) {
+        return UGJY_ERR_G2P_CONVERT;
+    }
+    if (num_tokens == 0) {
+        return UGJY_ERR_MODEL_NO_TOKENS;
     }
 
     ugjy_t p = params ? *params : UGJY_DEFAULT_PARAMS;
@@ -187,7 +191,8 @@ int ugjy_synthesize_text(
         .speaker_id       = p.speaker_id,
         .prosody_features = p.prosody_features,
         .speed            = (p.speed > 0.0f) ? p.speed : 1.0f,
-        .emotion          = p.emotion
+        .emotion          = p.emotion,
+        .style            = p.style
     };
 
     return ugjy_model_infer(
