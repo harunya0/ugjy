@@ -15,7 +15,9 @@ typedef struct {
     OrtEnv            *env;              // ONNX Runtimeの環境
     OrtSession        *session;          // ONNX Runtimeのセッション
     OrtSessionOptions *session_options;  // スレッド数等の設定
-    OrtMemoryInfo      *mem_info;        // CPUメモリ情報
+    OrtMemoryInfo     *mem_info;        // CPUメモリ情報
+    void              *mmap_ptr;
+    size_t             mmap_size;  
 } ugjy_onnx_session_t;
 
 // セッションの初期化とモデル読み込み

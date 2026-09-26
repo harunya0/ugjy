@@ -1,25 +1,27 @@
 #define _POSIX_C_SOURCE 199309L
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
-#include <time.h>
 #include <unistd.h>
+#include <time.h>
 #include "ugjy.h"
-#include "ugjy_stream.h"
 
-static uint8_t g_memory_pool[64 * 1024 * 1024]; // 64MB アリーナ
+// 2MB 静的アリーナ
+static uint8_t g_memory_pool[2 * 1024 * 1024];
 
-static double get_time_sec(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
-}
+typedef struct {
+    FILE           *audio_pipe;
+    ugjy_context_t *ctx;
+} app_context_t;
 
-// 口の開閉度（0.0 〜 1.0）を ASCII ゲージで描画
+// 30ms = 1440 サンプル (定数)
+#define CHUNK_SAMPLES 1440
+
+// 口の開閉度（0.0 〜 1.0）を ASCII ゲージで描画（母音推定つき）
 static void render_mouth_gauge(float open, float form) {
     const int bar_width = 15;
-    int filled = (int)(open * bar_width);
+    int filled = (int)(open * (float)bar_width);
     if (filled > bar_width) filled = bar_width;
+    if (filled < 0) filled = 0;
     char bar[32];
     for (int i = 0; i < bar_width; i++) {
         bar[i] = (i < filled) ? '#' : '-';
@@ -38,108 +40,108 @@ static void render_mouth_gauge(float open, float form) {
            bar, open * 100.0f, vowel);
     fflush(stdout);
 }
-typedef struct {
-    FILE *audio_pipe;
-} player_context_t;
 
-static int on_stream_chunk(
-    const char          *chunk_text,
-    const float         *pcm_chunk,
+// 音声再生コールバック（30msチャンク送信＆口パク描画＆中断チェック）
+static int on_chunk(
+    const char          *text,
+    const float         *pcm,
     size_t               num_samples,
     const ugjy_viseme_t *visemes,
     size_t               num_visemes,
-    int                  is_last,
     void                *user_data
 ) {
-    player_context_t *player = (player_context_t *)user_data;
-    struct timespec ts;
-    ts.tv_sec = 0;
-    ts.tv_nsec = 30000000; // 30ms
-    if (chunk_text && pcm_chunk && num_samples > 0) {
-        double dur_sec = (double)num_samples / 48000.0;
-        printf("\n  ▶ [発声開始] \"%s\" (%.2f秒分)\n", chunk_text, dur_sec);
-        // 1. 音声は一瞬でパイプに流す！（これでバッファ不足や音飛びは絶対に起きない）
-        if (player->audio_pipe) {
-            fwrite(pcm_chunk, sizeof(float), num_samples, player->audio_pipe);
-            fflush(player->audio_pipe);
+    app_context_t *app = (app_context_t *)user_data;
+    printf("\n  ▶ [発声開始] \"%s\" (待機キュー: %u件)\n", text, ugjy_get_queue_count(app->ctx));
+
+    size_t sent = 0;
+    struct timespec ts = {.tv_sec = 0, .tv_nsec = 30000000}; // 30ms
+
+    while (sent < num_samples) {
+        // ★ 話しかけられたら即時脱出！
+        if (ugjy_is_interrupted(app->ctx)) {
+            break;
         }
-        // 2. 音声がスピーカーから流れている「実時間」に合わせて、口の開閉度をリアルタイム描画！
-        if (visemes && num_visemes > 0) {
-            double start_t = get_time_sec();
-            while (1) {
-                double elapsed = get_time_sec() - start_t;
-                if (elapsed >= dur_sec) break;
-                // 経過時間から現在の口フレーム（1秒間に約93.75フレーム）を割り出す
-                size_t frame_idx = (size_t)(elapsed * (48000.0 / 512.0));
-                if (frame_idx >= num_visemes) frame_idx = num_visemes - 1;
-                // 口の開閉度を描画
-                render_mouth_gauge(visemes[frame_idx].mouth_open, visemes[frame_idx].mouth_form);
-                // 30fps（約33ミリ秒）周期で更新
-                nanosleep(&ts, NULL);
-            }
-            // 句の終わりは口を閉じる
-            render_mouth_gauge(0.0f, 0.0f);
-            printf("\n");
+
+        size_t to_write = num_samples - sent;
+        if (to_write > CHUNK_SAMPLES) to_write = CHUNK_SAMPLES;
+
+        if (app->audio_pipe) {
+            fwrite(pcm + sent, sizeof(float), to_write, app->audio_pipe);
+            fflush(app->audio_pipe);
         }
+        sent += to_write;
+
+        // 1フレーム 512 サンプル -> sent >> 9 で除算排除
+        size_t frame_idx = sent >> 9;
+        if (frame_idx >= num_visemes && num_visemes > 0) frame_idx = num_visemes - 1;
+
+        if (num_visemes > 0) {
+            render_mouth_gauge(visemes[frame_idx].mouth_open, visemes[frame_idx].mouth_form);
+        }
+        nanosleep(&ts, NULL);
     }
-    if (is_last) {
-        printf("  ✔ [ストリーム完了] すべての発話が終了しました。\n");
-    }
+
+    render_mouth_gauge(0.0f, 0.0f);
+    printf("\n");
     return 0;
 }
 
 int main(void) {
-    printf("========================================\n");
-    printf("  ugjy リアルタイム・ストリーミング TTS\n");
-    printf("========================================\n");
+    printf("========================================================\n");
+    printf("  ugjy リアルタイムTTS (全体総括アーキテクチャ)\n");
+    printf("========================================================\n");
 
     const char *model_dir = "models/tsukuyomi-v3-1";
     const char *config_path = "models/tsukuyomi-v3-1/model_config.json";
 
-    ugjy_context_t *ctx = ugjy_init(model_dir, g_memory_pool, sizeof(g_memory_pool));
-    if (!ctx) return 1;
+    // モデルとG2Pを一括初期化
+    ugjy_context_t *ctx = ugjy_init(model_dir, config_path, g_memory_pool, sizeof(g_memory_pool));
+    if (!ctx) {
+        fprintf(stderr, "ugjy_init に失敗しました\n");
+        return 1;
+    }
 
-    ugjy_g2p_t *g2p = ugjy_g2p_create(config_path);
-    if (!g2p) { ugjy_destroy(ctx); return 1; }
-
-    player_context_t player = {
-        .audio_pipe = popen("pacat --playback --format=float32le --rate=48000 --channels=1", "w")
+    app_context_t app = {
+        .audio_pipe = popen("pacat --playback --format=float32le --rate=48000 --channels=1", "w"),
+        .ctx = ctx
     };
 
-    // 音声パラメータ（機嫌: 上機嫌 HAPPY でテスト！）
+    // 音声パラメータ（機嫌: 上機嫌 HAPPY）
     ugjy_t params = UGJY_DEFAULT_PARAMS;
     params.emotion = UGJY_MOOD_HAPPY;
-    struct timespec ts;
-    ts.tv_sec = 0;
-    ts.tv_nsec = 30000000; // 30ms
 
-    ugjy_stream_t stream;
-    ugjy_stream_init(&stream, ctx, g2p, &params, on_stream_chunk, &player);
+    // 非同期キュー発話エンジンを開始
+    if (ugjy_start(ctx, &params, on_chunk, &app) != 0) {
+        fprintf(stderr, "ugjy_start に失敗しました\n");
+        if (app.audio_pipe) pclose(app.audio_pipe);
+        ugjy_destroy(ctx);
+        return 1;
+    }
 
-    // LLM からのトークンストリーム
+    // 1. LLM トークンストリーム投入（句読点検知で自動キューイング＆非同期発声）
     const char *tokens[] = {
         "こんにちは！",
         "私の", "名前は", "ツクヨミちゃんです！",
-        "あなたの", "声や", "表情に合わせて、",
-        "リアルタイムで", "おはなし", "できますよ！"
+        "よろしくね！"
     };
     int num_tokens = sizeof(tokens) / sizeof(tokens[0]);
 
-    printf("  [LLM トークン受信中...]\n");
+    printf("\n>>> トークンストリーム投入開始 <<<\n");
+    struct timespec token_delay = {.tv_sec = 0, .tv_nsec = 50000000}; // 50ms
     for (int i = 0; i < num_tokens; i++) {
-        printf("    [Token] \"%s\"\n", tokens[i]);
-        ugjy_stream_feed(&stream, tokens[i]);
-        nanosleep(&ts, NULL);
+        printf("  [Token] \"%s\"\n", tokens[i]);
+        ugjy_feed(ctx, tokens[i]);
+        nanosleep(&token_delay, NULL);
     }
+    ugjy_flush(ctx);
 
-    // 文末の掃き出し
-    ugjy_stream_flush(&stream);
+    // 発話終了を待機
+    ugjy_wait_idle(ctx);
+    printf("\n✨ すべての発話が正常に完了しました。\n");
 
-    if (player.audio_pipe) {
-        pclose(player.audio_pipe);
-    }
-    ugjy_g2p_destroy(g2p);
+    // クリーンアップ
     ugjy_destroy(ctx);
+    if (app.audio_pipe) pclose(app.audio_pipe);
 
     return 0;
 }

@@ -6,7 +6,7 @@ static const ugjy_config_t DEFAULT_CONFIG = {
     .max_tokens = 512,
     .max_audio_sec = 30,
     .flags = UGJY_FLAG_NONE,
-    .num_threads = 4
+    .num_threads = 2
 };
 
 static ugjy_config_t g_config = {
@@ -15,7 +15,7 @@ static ugjy_config_t g_config = {
     .max_tokens = 512,
     .max_audio_sec = 30,
     .flags = UGJY_FLAG_NONE,
-    .num_threads = 4
+    .num_threads = 2
 };
 
 // デフォルト設定の取得

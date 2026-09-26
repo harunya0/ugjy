@@ -2,12 +2,15 @@
 #include "onnxruntime_c_api.h"
 #include <stdio.h>
 #include <string.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 // エラーチェック用マクロ
 #define ORT_CHECK(api, expr) do { \
     OrtStatus* status = (expr); \
     if (status != NULL) { \
-        fprintf(stderr, "[ugjy_onnx error] %s\n", (api)->GetErrorMessage(status)); \
         (api)->ReleaseStatus(status); \
         return -1; \
     } \
@@ -23,22 +26,25 @@ int ugjy_onnx_session_init(
 
     // API関数テーブルの取得
     s->api = OrtGetApiBase()->GetApi(ORT_API_VERSION);
-    if (!s->api) {
-        fprintf(stderr, "[ugjy_onnx error] Failed to get ONNX Runtime API\n");
-        return -1;
-    }
+    if (!s->api) return -1;
 
     // 実行環境の作成
-    ORT_CHECK(s->api, s->api->CreateEnv(ORT_LOGGING_LEVEL_WARNING, "ugjy", &s->env));
+    static OrtEnv *g_shared_env = NULL;
+    if (!g_shared_env) {
+        ORT_CHECK(s->api, s->api->CreateEnv(ORT_LOGGING_LEVEL_WARNING, "ugjy", &g_shared_env));
+    }
+    s->env = g_shared_env;
 
     // セッションオプションの作成
     ORT_CHECK(s->api, s->api->CreateSessionOptions(&s->session_options));
 
     // スレッド数の設定
     if (num_threads > 0) {
-        ORT_CHECK(s->api, s->api->SetInterOpNumThreads(s->session_options, num_threads));
-        ORT_CHECK(s->api, s->api->SetIntraOpNumThreads(s->session_options, 1));
+        ORT_CHECK(s->api, s->api->SetInterOpNumThreads(s->session_options, 1));
+        ORT_CHECK(s->api, s->api->SetIntraOpNumThreads(s->session_options, num_threads));
     }
+    ORT_CHECK(s->api, s->api->DisableMemPattern(s->session_options));
+    ORT_CHECK(s->api, s->api->DisableCpuMemArena(s->session_options));
 
     // グラフ最適化
     ORT_CHECK(s->api, s->api->SetSessionGraphOptimizationLevel(s->session_options, ORT_ENABLE_ALL));
@@ -47,7 +53,7 @@ int ugjy_onnx_session_init(
     ORT_CHECK(s->api, s->api->CreateSession(s->env, model_path, s->session_options, &s->session));
 
     // CPUメモリ情報オブジェクトの作成
-    ORT_CHECK(s->api, s->api->CreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &s->mem_info));
+    ORT_CHECK(s->api, s->api->CreateCpuMemoryInfo(OrtDeviceAllocator, OrtMemTypeDefault, &s->mem_info));
 
     return 0;
 }
@@ -67,10 +73,7 @@ void ugjy_onnx_destroy(ugjy_onnx_session_t *s) {
         s->api->ReleaseSessionOptions(s->session_options);
         s->session_options = NULL;
     }
-    if (s->env) {
-        s->api->ReleaseEnv(s->env);
-        s->env = NULL;
-    }
+    s->env = NULL; // グローバル環境は解放しない
 
     memset(s, 0, sizeof(*s));
 }
@@ -98,7 +101,6 @@ OrtValue *ugjy_onnx_create_tensor(
     );
 
     if (status != NULL) {
-        fprintf(stderr, "[ugjy_onnx error] %s\n", s->api->GetErrorMessage(status));
         s->api->ReleaseStatus(status);
         return NULL;
     }
