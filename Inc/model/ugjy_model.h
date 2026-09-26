@@ -17,7 +17,7 @@ typedef struct {
     ugjy_onnx_session_t embedder;       // 1. 音素埋め込み (embedder_model.onnx)
     ugjy_onnx_session_t variance;       // 2. ピッチ・音素長予測 (variance_model.onnx)
     ugjy_onnx_session_t decoder;        // 3. 24kHz波形生成デコーダー (decoder_model.onnx)
-    uint32_t            sample_rate;    // 24000 Hz
+    uint32_t            sample_rate;    // 48000 Hz (HiFi-GAN)
     uint32_t            default_speaker;// 4 (つくよみちゃん「おしとやかv3」)
     ugjy_viseme_t       visemes[2048];
     size_t              num_visemes;

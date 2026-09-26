@@ -7,6 +7,7 @@ extern "C" {
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stdatomic.h>
 #include <pthread.h>
 
 // 2の累乗（ビットマスク & で除算・剰余演算を完全排除）
@@ -34,9 +35,12 @@ typedef struct {
 void     ugjy_fifo_init(ugjy_fifo_t *f);
 void     ugjy_fifo_destroy(ugjy_fifo_t *f);
 int      ugjy_fifo_push(ugjy_fifo_t *f, const char *item);
-int      ugjy_fifo_pop(ugjy_fifo_t *f, char *out_item, uint32_t max_len, volatile bool *is_running);
+int      ugjy_fifo_pop(ugjy_fifo_t *f, char *out_item, uint32_t max_len, const atomic_bool *is_running);
 uint32_t ugjy_fifo_clear(ugjy_fifo_t *f);
 uint32_t ugjy_fifo_count(ugjy_fifo_t *f);
+
+// ブロッキング中の pop を起床させる (カプセル化された cond_broadcast)
+void     ugjy_fifo_wakeup(ugjy_fifo_t *f);
 
 #ifdef __cplusplus
 }

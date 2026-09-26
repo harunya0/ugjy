@@ -1,17 +1,10 @@
 #include "ugjy_model.h"
 #include "ugjy_arena.h"
 #include "ugjy_error.h"
+#include "ugjy_onnx.h"
 #include <string.h>
 #include <stdio.h>
 #include <math.h>
-
-#define ORT_CHECK_RET(api, expr, err_code) do { \
-    OrtStatus* _status = (expr); \
-    if (_status != NULL) { \
-        (api)->ReleaseStatus(_status); \
-        return (err_code); \
-    } \
-} while (0)
 
 static inline void get_phoneme_viseme(int64_t token, float *open_y, float *form) {
     switch (token) {
@@ -94,7 +87,7 @@ void ugjy_model_destroy(ugjy_model_t *model) {
 // 単一責任ヘルパー関数群 (6ステップ パイプライン)
 // ============================================================================
 
-// 1. Embedder推論: 音素ID列から音素埋め込み特徴量を算出
+// 1. Embedder推論: 音素ID列から音素埋め込み特徴量を算出 (エラー時自己解放)
 static int step_embedder(
     ugjy_model_t *model,
     ugjy_arena_t *arena,
@@ -127,9 +120,13 @@ static int step_embedder(
     }
 
     float *feature_embedded = NULL;
-    ORT_CHECK_RET(model->embedder.api,
-                  model->embedder.api->GetTensorMutableData(emb_out_tensors[0], (void **)&feature_embedded),
-                  UGJY_ERR_ONNX_DATA);
+    OrtStatus *st = model->embedder.api->GetTensorMutableData(emb_out_tensors[0], (void **)&feature_embedded);
+    if (st != NULL) {
+        model->embedder.api->ReleaseStatus(st);
+        model->embedder.api->ReleaseValue(emb_out_tensors[0]);
+        model->embedder.api->ReleaseValue(t_phonemes);
+        return UGJY_ERR_ONNX_DATA;
+    }
 
     *out_emb_tensor = emb_out_tensors[0];
     *out_phonemes_tensor = t_phonemes;
@@ -137,7 +134,7 @@ static int step_embedder(
     return UGJY_OK;
 }
 
-// 2. Variance推論: ピッチ・音素長予測 & 無音ゼロクリア
+// 2. Variance推論: ピッチ・音素長予測 & 無音ゼロクリア (エラー時自己解放)
 static int step_variance(
     ugjy_model_t *model,
     ugjy_arena_t *arena,
@@ -193,8 +190,21 @@ static int step_variance(
     }
 
     float *pitches = NULL, *durations = NULL;
-    ORT_CHECK_RET(model->variance.api, model->variance.api->GetTensorMutableData(var_out_tensors[0], (void **)&pitches), UGJY_ERR_ONNX_DATA);
-    ORT_CHECK_RET(model->variance.api, model->variance.api->GetTensorMutableData(var_out_tensors[1], (void **)&durations), UGJY_ERR_ONNX_DATA);
+    OrtStatus *st1 = model->variance.api->GetTensorMutableData(var_out_tensors[0], (void **)&pitches);
+    if (st1 != NULL) {
+        model->variance.api->ReleaseStatus(st1);
+        model->variance.api->ReleaseValue(var_out_tensors[0]);
+        model->variance.api->ReleaseValue(var_out_tensors[1]);
+        return UGJY_ERR_ONNX_DATA;
+    }
+
+    OrtStatus *st2 = model->variance.api->GetTensorMutableData(var_out_tensors[1], (void **)&durations);
+    if (st2 != NULL) {
+        model->variance.api->ReleaseStatus(st2);
+        model->variance.api->ReleaseValue(var_out_tensors[0]);
+        model->variance.api->ReleaseValue(var_out_tensors[1]);
+        return UGJY_ERR_ONNX_DATA;
+    }
 
     // 無声音のピッチをゼロクリア
     for (size_t i = 0; i < num_tokens; i++) {
@@ -306,19 +316,19 @@ static int step_pitch_dynamics(
 
     // 1. 声帯の慣性平滑化（カクつき・詰まり音解消）
     float *temp_pitches = (float *)ugjy_arena_alloc(arena, total_frames * sizeof(float));
-    if (temp_pitches) {
-        for (int pass = 0; pass < 2; pass++) {
-            const float *src = (pass == 0) ? lr_pitches : temp_pitches;
-            float *dst = (pass == 0) ? temp_pitches : lr_pitches;
-            for (size_t f = 0; f < total_frames; f++) {
-                if (src[f] <= 0.0f) {
-                    dst[f] = 0.0f;
-                    continue;
-                }
-                float prev = (f > 0 && src[f - 1] > 0.0f) ? src[f - 1] : src[f];
-                float next = (f + 1 < total_frames && src[f + 1] > 0.0f) ? src[f + 1] : src[f];
-                dst[f] = 0.25f * prev + 0.50f * src[f] + 0.25f * next;
+    if (!temp_pitches) return UGJY_ERR_OUT_OF_MEMORY;
+
+    for (int pass = 0; pass < 2; pass++) {
+        const float *src = (pass == 0) ? lr_pitches : temp_pitches;
+        float *dst = (pass == 0) ? temp_pitches : lr_pitches;
+        for (size_t f = 0; f < total_frames; f++) {
+            if (src[f] <= 0.0f) {
+                dst[f] = 0.0f;
+                continue;
             }
+            float prev = (f > 0 && src[f - 1] > 0.0f) ? src[f - 1] : src[f];
+            float next = (f + 1 < total_frames && src[f + 1] > 0.0f) ? src[f + 1] : src[f];
+            dst[f] = 0.25f * prev + 0.50f * src[f] + 0.25f * next;
         }
     }
 
@@ -377,7 +387,7 @@ static int step_pitch_dynamics(
     return UGJY_OK;
 }
 
-// 5. Decoder推論: HiFi-GAN による 48kHz 波形生成
+// 5. Decoder推論: HiFi-GAN による 48kHz 波形生成 (エラー時自己解放)
 static int step_decoder(
     ugjy_model_t *model,
     ugjy_arena_t *arena,
@@ -424,14 +434,29 @@ static int step_decoder(
     }
 
     float *wav_data = NULL;
-    ORT_CHECK_RET(model->decoder.api, model->decoder.api->GetTensorMutableData(dec_out_tensors[0], (void **)&wav_data), UGJY_ERR_ONNX_DATA);
+    OrtStatus *st = model->decoder.api->GetTensorMutableData(dec_out_tensors[0], (void **)&wav_data);
+    if (st != NULL) {
+        model->decoder.api->ReleaseStatus(st);
+        model->decoder.api->ReleaseValue(dec_out_tensors[0]);
+        return UGJY_ERR_ONNX_DATA;
+    }
 
     OrtTensorTypeAndShapeInfo *shape_info = NULL;
-    ORT_CHECK_RET(model->decoder.api, model->decoder.api->GetTensorTypeAndShape(dec_out_tensors[0], &shape_info), UGJY_ERR_ONNX_DATA);
+    st = model->decoder.api->GetTensorTypeAndShape(dec_out_tensors[0], &shape_info);
+    if (st != NULL) {
+        model->decoder.api->ReleaseStatus(st);
+        model->decoder.api->ReleaseValue(dec_out_tensors[0]);
+        return UGJY_ERR_ONNX_DATA;
+    }
 
     size_t num_wav_samples = 0;
-    ORT_CHECK_RET(model->decoder.api, model->decoder.api->GetTensorShapeElementCount(shape_info, &num_wav_samples), UGJY_ERR_ONNX_DATA);
+    st = model->decoder.api->GetTensorShapeElementCount(shape_info, &num_wav_samples);
     model->decoder.api->ReleaseTensorTypeAndShapeInfo(shape_info);
+    if (st != NULL) {
+        model->decoder.api->ReleaseStatus(st);
+        model->decoder.api->ReleaseValue(dec_out_tensors[0]);
+        return UGJY_ERR_ONNX_DATA;
+    }
 
     *out_wav_tensor = dec_out_tensors[0];
     *out_wav_data = wav_data;

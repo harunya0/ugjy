@@ -3,22 +3,16 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stdatomic.h>
 #include <pthread.h>
 #include "ugjy_fifo.h"
 #include "ugjy_splitter.h"
 #include "ugjy_synth.h"
 
+// ugjy_speech_cb_t は ugjy.h で定義済み (ugjy_synth.h → ugjy.h 経由で取得)
+
 // 前方宣言
 typedef struct ugjy_context ugjy_context_t;
-
-typedef int (*ugjy_speech_cb_t)(
-    const char          *text,
-    const float         *pcm,
-    size_t               num_samples,
-    const ugjy_viseme_t *visemes,
-    size_t               num_visemes,
-    void                *user_data
-);
 
 // Queue管理レイヤー構造体
 typedef struct ugjy_queue {
@@ -28,14 +22,18 @@ typedef struct ugjy_queue {
     pthread_mutex_t     splitter_mutex;
 
     pthread_t           worker_thread;
-    volatile bool       is_running;
-    volatile bool       is_interrupted;
-    volatile bool       is_speaking;
-    volatile bool       is_busy;
+    atomic_bool         is_running;
+    atomic_bool         is_interrupted;
+    atomic_bool         is_speaking;
+    atomic_bool         is_busy;
 
     ugjy_speech_cb_t    callback;
     void               *user_data;
     char                current_text[UGJY_FIFO_ITEM_MAX_LEN];
+
+    // ワーカースレッド専用バッファ (所有権は queue に完全に帰属)
+    float               pcm_buf[UGJY_SYNTH_MAX_SAMPLES];
+    ugjy_viseme_t       viseme_buf[UGJY_SYNTH_MAX_VISEMES];
 } ugjy_queue_t;
 
 int      ugjy_queue_init(ugjy_queue_t *q, ugjy_context_t *ctx, const ugjy_t *params, ugjy_speech_cb_t cb, void *user_data);

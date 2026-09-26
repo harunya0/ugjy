@@ -50,7 +50,7 @@ void ugjy_splitter_feed(ugjy_splitter_t *s, const char *token) {
     }
 
     strncat(s->buf, token, sizeof(s->buf) - s->len - 1);
-    s->len += (uint32_t)token_len;
+    s->len = (uint32_t)strlen(s->buf);
 
     // 句読点検知ループ
     while (s->len > 0) {

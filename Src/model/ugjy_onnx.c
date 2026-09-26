@@ -3,19 +3,28 @@
 #include "onnxruntime_c_api.h"
 #include <stdio.h>
 #include <string.h>
+#include <pthread.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
 
-// エラーチェック用マクロ（ステータス解放後に固有エラーコードを返却）
-#define ORT_CHECK_RET(api, expr, err_code) do { \
-    OrtStatus* _status = (expr); \
-    if (_status != NULL) { \
-        (api)->ReleaseStatus(_status); \
-        return (err_code); \
-    } \
-} while (0)
+static OrtEnv *g_shared_env = NULL;
+static pthread_once_t g_env_once = PTHREAD_ONCE_INIT;
+static int g_env_init_ret = 0;
+
+static void init_shared_env(void) {
+    const OrtApi *api = OrtGetApiBase()->GetApi(ORT_API_VERSION);
+    if (!api) {
+        g_env_init_ret = UGJY_ERR_ONNX_API;
+        return;
+    }
+    OrtStatus *st = api->CreateEnv(ORT_LOGGING_LEVEL_WARNING, "ugjy", &g_shared_env);
+    if (st != NULL) {
+        api->ReleaseStatus(st);
+        g_env_init_ret = UGJY_ERR_ONNX_ENV;
+    }
+}
 
 int ugjy_onnx_session_init(
     ugjy_onnx_session_t *s,
@@ -29,32 +38,43 @@ int ugjy_onnx_session_init(
     s->api = OrtGetApiBase()->GetApi(ORT_API_VERSION);
     if (!s->api) return UGJY_ERR_ONNX_API;
 
-    // 実行環境の作成
-    static OrtEnv *g_shared_env = NULL;
-    if (!g_shared_env) {
-        ORT_CHECK_RET(s->api, s->api->CreateEnv(ORT_LOGGING_LEVEL_WARNING, "ugjy", &g_shared_env), UGJY_ERR_ONNX_ENV);
+    // 実行環境の作成 (pthread_once による安全な初期化)
+    pthread_once(&g_env_once, init_shared_env);
+    if (g_env_init_ret != 0 || !g_shared_env) {
+        return (g_env_init_ret != 0) ? g_env_init_ret : UGJY_ERR_ONNX_ENV;
     }
     s->env = g_shared_env;
 
     // セッションオプションの作成
-    ORT_CHECK_RET(s->api, s->api->CreateSessionOptions(&s->session_options), UGJY_ERR_ONNX_OPTIONS);
+    OrtStatus *st = s->api->CreateSessionOptions(&s->session_options);
+    if (st != NULL) {
+        s->api->ReleaseStatus(st);
+        return UGJY_ERR_ONNX_OPTIONS;
+    }
 
     // スレッド数の設定
     if (num_threads > 0) {
-        ORT_CHECK_RET(s->api, s->api->SetInterOpNumThreads(s->session_options, 1), UGJY_ERR_ONNX_OPTIONS);
-        ORT_CHECK_RET(s->api, s->api->SetIntraOpNumThreads(s->session_options, num_threads), UGJY_ERR_ONNX_OPTIONS);
+        st = s->api->SetInterOpNumThreads(s->session_options, 1);
+        if (st) { s->api->ReleaseStatus(st); ugjy_onnx_destroy(s); return UGJY_ERR_ONNX_OPTIONS; }
+        st = s->api->SetIntraOpNumThreads(s->session_options, num_threads);
+        if (st) { s->api->ReleaseStatus(st); ugjy_onnx_destroy(s); return UGJY_ERR_ONNX_OPTIONS; }
     }
-    ORT_CHECK_RET(s->api, s->api->DisableMemPattern(s->session_options), UGJY_ERR_ONNX_OPTIONS);
-    ORT_CHECK_RET(s->api, s->api->DisableCpuMemArena(s->session_options), UGJY_ERR_ONNX_OPTIONS);
+    st = s->api->DisableMemPattern(s->session_options);
+    if (st) { s->api->ReleaseStatus(st); ugjy_onnx_destroy(s); return UGJY_ERR_ONNX_OPTIONS; }
+    st = s->api->DisableCpuMemArena(s->session_options);
+    if (st) { s->api->ReleaseStatus(st); ugjy_onnx_destroy(s); return UGJY_ERR_ONNX_OPTIONS; }
 
     // グラフ最適化
-    ORT_CHECK_RET(s->api, s->api->SetSessionGraphOptimizationLevel(s->session_options, ORT_ENABLE_ALL), UGJY_ERR_ONNX_OPTIONS);
+    st = s->api->SetSessionGraphOptimizationLevel(s->session_options, ORT_ENABLE_ALL);
+    if (st) { s->api->ReleaseStatus(st); ugjy_onnx_destroy(s); return UGJY_ERR_ONNX_OPTIONS; }
 
     // モデルの読み込み
-    ORT_CHECK_RET(s->api, s->api->CreateSession(s->env, model_path, s->session_options, &s->session), UGJY_ERR_ONNX_SESSION);
+    st = s->api->CreateSession(s->env, model_path, s->session_options, &s->session);
+    if (st) { s->api->ReleaseStatus(st); ugjy_onnx_destroy(s); return UGJY_ERR_ONNX_SESSION; }
 
     // CPUメモリ情報オブジェクトの作成
-    ORT_CHECK_RET(s->api, s->api->CreateCpuMemoryInfo(OrtDeviceAllocator, OrtMemTypeDefault, &s->mem_info), UGJY_ERR_ONNX_OPTIONS);
+    st = s->api->CreateCpuMemoryInfo(OrtDeviceAllocator, OrtMemTypeDefault, &s->mem_info);
+    if (st) { s->api->ReleaseStatus(st); ugjy_onnx_destroy(s); return UGJY_ERR_ONNX_OPTIONS; }
 
     return UGJY_OK;
 }
@@ -74,7 +94,7 @@ void ugjy_onnx_destroy(ugjy_onnx_session_t *s) {
         s->api->ReleaseSessionOptions(s->session_options);
         s->session_options = NULL;
     }
-    s->env = NULL; // グローバル環境は解放しない
+    s->env = NULL; // グローバル共有環境は解放しない
 
     memset(s, 0, sizeof(*s));
 }
@@ -119,7 +139,6 @@ int ugjy_onnx_run(
     OrtValue** output_tensors
 ) {
     if (!s || !s->api || !s->session) return UGJY_ERR_INVALID_ARG;
-    // 推論を実行
     ORT_CHECK_RET(s->api, s->api->Run(
         s->session,
         NULL,

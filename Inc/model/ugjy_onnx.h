@@ -6,6 +6,16 @@
 #include <stdbool.h>
 #include "onnxruntime_c_api.h"
 
+// 共通ORT エラーチェックマクロ（ステータス解放後に固有エラーコードを返却）
+// ugjy_onnx.c と ugjy_model.c の両方から使用
+#define ORT_CHECK_RET(api, expr, err_code) do { \
+    OrtStatus* _ort_st = (expr); \
+    if (_ort_st != NULL) { \
+        (api)->ReleaseStatus(_ort_st); \
+        return (err_code); \
+    } \
+} while (0)
+
 #ifdef __cplusplus
 extern "C" {
 #endif

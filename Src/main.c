@@ -5,8 +5,8 @@
 #include <time.h>
 #include "ugjy.h"
 
-// 2MB 静的アリーナ
-static uint8_t g_memory_pool[2 * 1024 * 1024];
+// 4MB 静的アリーナ (queue インスタンスバッファ + 推論ワーキング領域)
+static uint8_t g_memory_pool[4 * 1024 * 1024];
 
 typedef struct {
     FILE           *audio_pipe;

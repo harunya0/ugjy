@@ -37,15 +37,15 @@ int ugjy_fifo_push(ugjy_fifo_t *f, const char *item) {
 }
 
 // 先頭から取り出して消去 (FIFO)
-int ugjy_fifo_pop(ugjy_fifo_t *f, char *out_item, uint32_t max_len, volatile bool *is_running) {
+int ugjy_fifo_pop(ugjy_fifo_t *f, char *out_item, uint32_t max_len, const atomic_bool *is_running) {
     if (!f || !out_item || max_len == 0) return UGJY_ERR_INVALID_ARG;
 
     pthread_mutex_lock(&f->mutex);
-    while (f->count == 0 && *is_running) {
+    while (f->count == 0 && (is_running == NULL || atomic_load(is_running))) {
         pthread_cond_wait(&f->not_empty, &f->mutex);
     }
 
-    if (!*is_running && f->count == 0) {
+    if ((is_running != NULL && !atomic_load(is_running)) && f->count == 0) {
         pthread_mutex_unlock(&f->mutex);
         return UGJY_ERR_QUEUE_EMPTY;
     }
@@ -81,4 +81,11 @@ uint32_t ugjy_fifo_count(ugjy_fifo_t *f) {
     pthread_mutex_unlock(&f->mutex);
 
     return c;
+}
+
+void ugjy_fifo_wakeup(ugjy_fifo_t *f) {
+    if (!f) return;
+    pthread_mutex_lock(&f->mutex);
+    pthread_cond_broadcast(&f->not_empty);
+    pthread_mutex_unlock(&f->mutex);
 }
