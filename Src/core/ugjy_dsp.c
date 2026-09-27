@@ -35,6 +35,17 @@ static void apply_whisper_dsp_clean(
         pcm[i] = y0;
     }
 
+    // 1.5 呼気エアバンド・エンハンサー (>6kHz 呼気成分を +18% 加算して息掛かり感を再現)
+    const float alpha_air = 0.50f; // 約6kHz以上のハイパス
+    float air_prev_x = 0.0f, air_prev_y = 0.0f;
+    for (size_t i = 0; i < num_samples; i++) {
+        float x = pcm[i];
+        float y_hp = alpha_air * (air_prev_y + x - air_prev_x);
+        air_prev_x = x;
+        air_prev_y = y_hp;
+        pcm[i] += 0.18f * y_hp; // 吐息のエア感をブレンド
+    }
+
     // 2. ピーク正規化 (耳元・ASMR適正音量: -7dBFS = 0.45f)
     const float target_peak = 0.45f;
     float max_peak = 0.0f;
@@ -48,10 +59,10 @@ static void apply_whisper_dsp_clean(
     }
 
     // 3. 無音判定フレームの出力ゲート処理 (memset による完全消音)
-    // 正規化後の最大ピークに対する相対しきい値 (2.5%) で息継ぎ・無音区間を判定
-    const float silence_thresh = target_peak * 0.025f; // 0.01125f
+    // 語尾の呼気余韻（ブレス）を消さないようしきい値を 1.2% に緩和
+    const float silence_thresh = target_peak * 0.012f; // 約 0.0054f
     const size_t frame_sz = 512;
-    const size_t fade_len = 240; // 5ms クロスフェード (語尾の段差・プチつき防止)
+    const size_t fade_len = 480; // 10ms クロスフェード (吐息が自然に消え入る余韻)
     bool prev_silent = true;
 
     for (size_t start = 0; start < num_samples; start += frame_sz) {
