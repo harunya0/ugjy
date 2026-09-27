@@ -35,16 +35,12 @@ else()
     add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
-# Src 内のすべての .c ファイルを再帰的に自動検出
-file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS "Src/*.c")
+# Src 内の全ソースからライブラリ用ソース（main.c 除外）を抽出
+file(GLOB_RECURSE LIB_SOURCES CONFIGURE_DEPENDS "Src/*.c")
+list(FILTER LIB_SOURCES EXCLUDE REGEX "Src/main\\.c$")
 
-# 実行可能ファイルの定義
-add_executable(ugjy ${SOURCES})
-
-# インクルードパスの設定
-# - Inc: ugjy 自体のヘッダー (core, model, queue サブディレクトリ含む)
-# - Lib: 外部ライブラリのヘッダー
-target_include_directories(ugjy PRIVATE
+# 共通インクルードパスの設定
+set(UGJY_INC_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/Inc
     ${CMAKE_CURRENT_SOURCE_DIR}/Inc/core
     ${CMAKE_CURRENT_SOURCE_DIR}/Inc/model
@@ -53,14 +49,20 @@ target_include_directories(ugjy PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/Lib/onnxruntime/include
 )
 
-# 将来 Lib/ 配下に置く外部ライブラリ（.so, .a, .lib など）の検索パス
-target_link_directories(ugjy PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/Lib
+# 1. 共有ライブラリターゲットの定義 (libugjy.so -> Rust / C# FFI 用)
+add_library(ugjy_shared SHARED ${LIB_SOURCES})
+set_target_properties(ugjy_shared PROPERTIES
+    OUTPUT_NAME "ugjy"
+    SOVERSION 1
+    VERSION 0.1.0
+    POSITION_INDEPENDENT_CODE ON
+    BUILD_RPATH "${CMAKE_CURRENT_SOURCE_DIR}/Lib/onnxruntime/lib"
 )
+target_include_directories(ugjy_shared PUBLIC ${UGJY_INC_DIRS})
+target_link_directories(ugjy_shared PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Lib)
 
-# Linux 環境用: 数学関数（math.h）やスレッド（pthread）を使う場合の標準ライブラリ
 if(UNIX AND NOT APPLE)
-    target_link_libraries(ugjy PRIVATE
+    target_link_libraries(ugjy_shared PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/Lib/onnxruntime/lib/libonnxruntime.so
         ${CMAKE_CURRENT_SOURCE_DIR}/Lib/libugjy_g2p.a
         m
@@ -69,7 +71,10 @@ if(UNIX AND NOT APPLE)
     )
 endif()
 
-# 実行時に libonnxruntime.so を自動で読み込めるようにする
+# 2. CLI 実行可能ファイルターゲットの定義 (libugjy.so とリンク)
+add_executable(ugjy Src/main.c)
+target_include_directories(ugjy PRIVATE ${UGJY_INC_DIRS})
+target_link_libraries(ugjy PRIVATE ugjy_shared)
 set_target_properties(ugjy PROPERTIES
-    BUILD_RPATH "${CMAKE_CURRENT_SOURCE_DIR}/Lib/onnxruntime/lib"
+    BUILD_RPATH "${CMAKE_CURRENT_SOURCE_DIR}/Lib/onnxruntime/lib;$ORIGIN"
 )

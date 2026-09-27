@@ -411,32 +411,7 @@ int ugjy_model_infer(
         }
     }
 
-    // [診断ダンプ] 通常TTSの特徴量とピッチの統計値
-    {
-        float f_min = 1e9f, f_max = -1e9f, f_sum = 0.0f;
-        size_t f_total = total_frames * 192;
-        for (size_t k = 0; k < f_total; k++) {
-            float v = lr_features[k];
-            if (v < f_min) f_min = v;
-            if (v > f_max) f_max = v;
-            f_sum += v;
-        }
-        float p_min = 1e9f, p_max = -1e9f, p_sum = 0.0f;
-        size_t p_cnt = 0;
-        for (size_t f = 0; f < total_frames; f++) {
-            float v = lr_pitches[f];
-            if (v > 0.01f) {
-                if (v < p_min) p_min = v;
-                if (v > p_max) p_max = v;
-                p_sum += v;
-                p_cnt++;
-            }
-        }
-        printf("  [TTS診断] 特徴量: min=%6.2f, max=%6.2f, mean=%6.2f | 有声F0: min=%5.2f, max=%5.2f, mean=%5.2f (有声率 %zu/%zu)\n",
-               f_min, f_max, f_sum / (float)f_total,
-               p_cnt ? p_min : 0.0f, p_cnt ? p_max : 0.0f, p_cnt ? (p_sum / (float)p_cnt) : 0.0f,
-               p_cnt, total_frames);
-    }
+
 
     // Step 7: Decoder 推論 (HiFi-GAN 波形生成)
     OrtValue *t_wav = NULL;
@@ -530,32 +505,7 @@ int ugjy_model_infer_svs(
     // Step 3: 口パク Viseme 生成
     ugjy_viseme_generate(phrase->tokens, phrase->frame_counts, phrase->num_tokens, model->visemes, 2048, &model->num_visemes);
 
-    // [診断ダンプ] SVSの特徴量とピッチの統計値
-    {
-        float f_min = 1e9f, f_max = -1e9f, f_sum = 0.0f;
-        size_t f_total = phrase->total_frames * 192;
-        for (size_t k = 0; k < f_total; k++) {
-            float v = lr_features[k];
-            if (v < f_min) f_min = v;
-            if (v > f_max) f_max = v;
-            f_sum += v;
-        }
-        float p_min = 1e9f, p_max = -1e9f, p_sum = 0.0f;
-        size_t p_cnt = 0;
-        for (size_t f = 0; f < phrase->total_frames; f++) {
-            float v = phrase->pitches[f];
-            if (v > 0.01f) {
-                if (v < p_min) p_min = v;
-                if (v > p_max) p_max = v;
-                p_sum += v;
-                p_cnt++;
-            }
-        }
-        printf("  [SVS診断] 特徴量: min=%6.2f, max=%6.2f, mean=%6.2f | 有声F0: min=%5.2f, max=%5.2f, mean=%5.2f (有声率 %zu/%zu)\n",
-               f_min, f_max, f_sum / (float)f_total,
-               p_cnt ? p_min : 0.0f, p_cnt ? p_max : 0.0f, p_cnt ? (p_sum / (float)p_cnt) : 0.0f,
-               p_cnt, phrase->total_frames);
-    }
+
 
     // Step 4: Decoder推論 (VUV分離＆安全クランプされたSVSピッチ配列を直接投入)
     OrtValue *t_wav = NULL;

@@ -242,40 +242,7 @@ int ugjy_svs_build_phrase(
         }
     }
 
-    // [音符別診断ダンプ] 各ノートのトークン数、フレーム数、F0平均、最大ピッチ揺れ幅の可視化
-    // （VUVマスク適用前の純粋なピッチ連続性・ビブラート安定性を正確に診断）
-    printf("  --- [フレーズ内音符診断] (ノート数: %zu) ---\n", num_notes);
-    size_t d_f_cursor = frame_counts[0]; // pau スキップ
-    size_t d_tok_cursor = 1;
-    for (size_t i = 0; i < num_notes; i++) {
-        const ugjy_note_t *nt = &notes[i];
-        size_t n_frames = 0;
-        size_t n_tokens_cnt = 0;
-        while (d_tok_cursor < tok_idx && token_note[d_tok_cursor] == i) {
-            n_frames += (size_t)frame_counts[d_tok_cursor];
-            n_tokens_cnt++;
-            d_tok_cursor++;
-        }
-        float p_mean = 0.0f;
-        float p_max_dev = 0.0f;
-        float p_vib_dev = 0.0f;
-        if (n_frames > 0) {
-            float p_sum = 0.0f;
-            for (size_t k = 0; k < n_frames; k++) {
-                p_sum += pitches[d_f_cursor + k];
-            }
-            p_mean = p_sum / (float)n_frames;
-            for (size_t k = 0; k < n_frames; k++) {
-                float dev = fabsf(pitches[d_f_cursor + k] - p_mean);
-                if (dev > p_max_dev) p_max_dev = dev;
-                if (k >= n_frames / 2 && dev > p_vib_dev) p_vib_dev = dev; // 後半(ビブラート区間)の純粋な揺れ幅
-            }
-        }
-        printf("    ノート[%2zu] '%s' (key=%2d, dur=%3dms, vib=%d) -> トークン数=%zu, frames=%2zu (約%3.0fms), F0平均=%.3f, 最大揺れ=%.4f (後半揺れ=%.4f)\n",
-               i, nt->lyric ? nt->lyric : "R", nt->key, nt->duration_ms, nt->vibrato,
-               n_tokens_cnt, n_frames, (float)n_frames * 10.667f, p_mean, p_max_dev, p_vib_dev);
-        d_f_cursor += n_frames;
-    }
+
 
     // ========================================================================
     // Step 5: VUVマスクの適用と有声F0の安全圏クランプ（min >= 5.0f ガード）
