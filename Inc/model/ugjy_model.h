@@ -8,6 +8,7 @@
 #include "ugjy_onnx.h"
 #include "ugjy_dsp.h"
 #include "ugjy.h"
+#include "ugjy_svs.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -54,6 +55,17 @@ int ugjy_model_infer(
     float *out_pcm,
     size_t max_samples,
     size_t *out_samples
+);
+
+// SVS歌唱専用推論実行 (varianceモデルをスキップし、SVSピッチ・フレーム長でHiFi-GANを駆動)
+int ugjy_model_infer_svs(
+    ugjy_model_t            *model,
+    ugjy_arena_t            *arena,
+    const ugjy_svs_phrase_t *phrase,
+    uint32_t                 speaker_id,
+    float                   *out_pcm,
+    size_t                   max_samples,
+    size_t                  *out_samples
 );
 
 #ifdef __cplusplus

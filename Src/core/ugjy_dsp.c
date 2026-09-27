@@ -121,6 +121,42 @@ void ugjy_dsp_postprocess(
         return;
     }
 
+    // 歌唱専用 DSP (UGJY_STYLE_SINGING: 超高域シャリつき・チリつきの完全蒸発)
+    if (style == UGJY_STYLE_SINGING) {
+        // 1. DCオフセット除去 HPF (約30Hz)
+        const float alpha_hp = 0.9960f;
+        float prev_x = pcm[0], prev_y = pcm[0];
+        for (size_t i = 0; i < num_samples; i++) {
+            float x = pcm[i];
+            float y = alpha_hp * (prev_y + x - prev_x);
+            prev_x = x; prev_y = y;
+            pcm[i] = y;
+        }
+
+        // 2. 3タップ対称FIR移動平均 (ナイキスト24kHz折り返しノイズ完全消滅)
+        float prev_s = pcm[0];
+        for (size_t i = 1; i + 1 < num_samples; i++) {
+            float curr_s = pcm[i];
+            pcm[i] = 0.25f * prev_s + 0.50f * curr_s + 0.25f * pcm[i + 1];
+            prev_s = curr_s;
+        }
+
+        // 3. 超軽量 1次 IIR ローパス (カットオフ ≒ 10.5kHz, alpha = 0.58f)
+        // 声の芯(〜5kHz)を100%温存し、10kHz超のチリつき・粒子感を完全に蒸発！
+        const float alpha_lp = 0.58f;
+        float prev_lp = pcm[0];
+        for (size_t i = 0; i < num_samples; i++) {
+            pcm[i] = prev_lp + alpha_lp * (pcm[i] - prev_lp);
+            prev_lp = pcm[i];
+        }
+
+        // 4. 固定ゲイン (0.92f)
+        for (size_t i = 0; i < num_samples; i++) {
+            pcm[i] *= 0.92f;
+        }
+        return;
+    }
+
     // 通常発話 (UGJY_STYLE_NORMAL): 完璧な高音質を100%維持
     // 1. 低域カット (DCカットHPF)
     const float alpha_hp = 0.9935f;

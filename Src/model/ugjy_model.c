@@ -7,6 +7,7 @@
 #include "ugjy_dsp.h"
 #include <string.h>
 #include <stdio.h>
+#include <math.h>
 
 int ugjy_model_load(
     ugjy_model_t *model,
@@ -410,6 +411,33 @@ int ugjy_model_infer(
         }
     }
 
+    // [診断ダンプ] 通常TTSの特徴量とピッチの統計値
+    {
+        float f_min = 1e9f, f_max = -1e9f, f_sum = 0.0f;
+        size_t f_total = total_frames * 192;
+        for (size_t k = 0; k < f_total; k++) {
+            float v = lr_features[k];
+            if (v < f_min) f_min = v;
+            if (v > f_max) f_max = v;
+            f_sum += v;
+        }
+        float p_min = 1e9f, p_max = -1e9f, p_sum = 0.0f;
+        size_t p_cnt = 0;
+        for (size_t f = 0; f < total_frames; f++) {
+            float v = lr_pitches[f];
+            if (v > 0.01f) {
+                if (v < p_min) p_min = v;
+                if (v > p_max) p_max = v;
+                p_sum += v;
+                p_cnt++;
+            }
+        }
+        printf("  [TTS診断] 特徴量: min=%6.2f, max=%6.2f, mean=%6.2f | 有声F0: min=%5.2f, max=%5.2f, mean=%5.2f (有声率 %zu/%zu)\n",
+               f_min, f_max, f_sum / (float)f_total,
+               p_cnt ? p_min : 0.0f, p_cnt ? p_max : 0.0f, p_cnt ? (p_sum / (float)p_cnt) : 0.0f,
+               p_cnt, total_frames);
+    }
+
     // Step 7: Decoder 推論 (HiFi-GAN 波形生成)
     OrtValue *t_wav = NULL;
     float *wav_data = NULL;
@@ -424,6 +452,133 @@ int ugjy_model_infer(
     model->decoder.api->ReleaseValue(t_wav);
 
     ugjy_dsp_postprocess(out_pcm, copy_samples, model->sample_rate, req->style, &model->dsp_state, arena);
+    *out_samples = copy_samples;
+
+cleanup:
+    ugjy_arena_restore(arena, arena_marker);
+    return ret;
+}
+
+// SVS歌唱専用推論実行 (varianceモデルをスキップし、SVSピッチ・フレーム長でHiFi-GANを駆動)
+int ugjy_model_infer_svs(
+    ugjy_model_t            *model,
+    ugjy_arena_t            *arena,
+    const ugjy_svs_phrase_t *phrase,
+    uint32_t                 speaker_id,
+    float                   *out_pcm,
+    size_t                   max_samples,
+    size_t                  *out_samples
+) {
+    if (!model || !arena || !phrase || !out_pcm || !out_samples) return UGJY_ERR_INVALID_ARG;
+    if (phrase->num_tokens == 0 || phrase->total_frames == 0) return UGJY_ERR_MODEL_NO_TOKENS;
+
+    *out_samples = 0;
+    size_t arena_marker = ugjy_arena_mark(arena);
+    int ret = UGJY_OK;
+
+    int64_t spk_id = (speaker_id > 0) ? (int64_t)speaker_id : (int64_t)model->default_speaker;
+
+    // Step 1: Embedder推論 (音素埋め込み)
+    OrtValue *t_emb_out = NULL, *t_phonemes = NULL;
+    float *feature_embedded = NULL;
+    ret = step_embedder(model, arena, phrase->tokens, phrase->num_tokens, &t_emb_out, &t_phonemes, &feature_embedded);
+    if (ret != UGJY_OK) goto cleanup;
+
+    // Step 2: Length Regulator (SVSのframe_countsに従って特徴量を展開)
+    float *lr_features = (float *)ugjy_arena_alloc(arena, phrase->total_frames * 192 * sizeof(float));
+    if (!lr_features) {
+        ret = UGJY_ERR_OUT_OF_MEMORY;
+        model->embedder.api->ReleaseValue(t_emb_out);
+        model->embedder.api->ReleaseValue(t_phonemes);
+        goto cleanup;
+    }
+
+    size_t curr_frame = 0;
+    for (size_t i = 0; i < phrase->num_tokens; i++) {
+        int cnt = phrase->frame_counts[i];
+        const float *src_feat = feature_embedded + (i * 192);
+        for (int f = 0; f < cnt; f++) {
+            memcpy(lr_features + (curr_frame * 192), src_feat, 192 * sizeof(float));
+            curr_frame++;
+        }
+    }
+    model->embedder.api->ReleaseValue(t_emb_out);
+    model->embedder.api->ReleaseValue(t_phonemes);
+
+    // 特徴量の時間軸1段スムージング (3タップ対称FIR) ＆ マイルドクランプ (±4.0f)
+    // 音素内部は100%完全維持したまま、境界の急峻なエッジだけをスッと溶かし、倍音裏の微細粒子感を消滅！
+    float *feat_buf = (float *)ugjy_arena_alloc(arena, phrase->total_frames * 192 * sizeof(float));
+    if (feat_buf) {
+        memcpy(feat_buf, lr_features, phrase->total_frames * 192 * sizeof(float));
+        for (size_t f = 0; f < phrase->total_frames; f++) {
+            size_t prev_f = (f > 0) ? (f - 1) : f;
+            size_t next_f = (f + 1 < phrase->total_frames) ? (f + 1) : f;
+            const float *p_prev = feat_buf + (prev_f * 192);
+            const float *p_curr = feat_buf + (f * 192);
+            const float *p_next = feat_buf + (next_f * 192);
+            float *p_dst = lr_features + (f * 192);
+
+            for (size_t d = 0; d < 192; d++) {
+                float val = 0.25f * p_prev[d] + 0.50f * p_curr[d] + 0.25f * p_next[d];
+                if (val > 4.0f) val = 4.0f;
+                else if (val < -4.0f) val = -4.0f;
+                p_dst[d] = val;
+            }
+        }
+    }
+
+    // Step 3: 口パク Viseme 生成
+    ugjy_viseme_generate(phrase->tokens, phrase->frame_counts, phrase->num_tokens, model->visemes, 2048, &model->num_visemes);
+
+    // [診断ダンプ] SVSの特徴量とピッチの統計値
+    {
+        float f_min = 1e9f, f_max = -1e9f, f_sum = 0.0f;
+        size_t f_total = phrase->total_frames * 192;
+        for (size_t k = 0; k < f_total; k++) {
+            float v = lr_features[k];
+            if (v < f_min) f_min = v;
+            if (v > f_max) f_max = v;
+            f_sum += v;
+        }
+        float p_min = 1e9f, p_max = -1e9f, p_sum = 0.0f;
+        size_t p_cnt = 0;
+        for (size_t f = 0; f < phrase->total_frames; f++) {
+            float v = phrase->pitches[f];
+            if (v > 0.01f) {
+                if (v < p_min) p_min = v;
+                if (v > p_max) p_max = v;
+                p_sum += v;
+                p_cnt++;
+            }
+        }
+        printf("  [SVS診断] 特徴量: min=%6.2f, max=%6.2f, mean=%6.2f | 有声F0: min=%5.2f, max=%5.2f, mean=%5.2f (有声率 %zu/%zu)\n",
+               f_min, f_max, f_sum / (float)f_total,
+               p_cnt ? p_min : 0.0f, p_cnt ? p_max : 0.0f, p_cnt ? (p_sum / (float)p_cnt) : 0.0f,
+               p_cnt, phrase->total_frames);
+    }
+
+    // Step 4: Decoder推論 (VUV分離＆安全クランプされたSVSピッチ配列を直接投入)
+    OrtValue *t_wav = NULL;
+    float *wav_data = NULL;
+    size_t num_wav_samples = 0;
+    ret = step_decoder(model, arena, lr_features, phrase->pitches, spk_id, phrase->total_frames,
+                       &t_wav, &wav_data, &num_wav_samples);
+    if (ret != UGJY_OK) goto cleanup;
+
+    // Step 5: 音響後処理 (歌唱はクリアなNORMALスタイルDSPを適用)
+    size_t copy_samples = (num_wav_samples > max_samples) ? max_samples : num_wav_samples;
+    memcpy(out_pcm, wav_data, copy_samples * sizeof(float));
+    model->decoder.api->ReleaseValue(t_wav);
+
+    ugjy_dsp_postprocess(out_pcm, copy_samples, model->sample_rate, UGJY_STYLE_SINGING, &model->dsp_state, arena);
+
+    // フレーズ末尾のゼロ軟着陸コサインフェード (10ms、ブツッ音を完全排除)
+    const size_t fade_samples = (copy_samples > 480) ? 480 : copy_samples;
+    for (size_t k = 0; k < fade_samples; k++) {
+        size_t idx = copy_samples - fade_samples + k;
+        float r = 0.5f * (1.0f + cosf((float)k / (float)fade_samples * 3.14159265f));
+        out_pcm[idx] *= r;
+    }
     *out_samples = copy_samples;
 
 cleanup:

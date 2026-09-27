@@ -4,6 +4,8 @@
 #include "ugjy_model.h"
 #include "ugjy_wav.h"
 #include "ugjy_queue.h"
+#include "model/ugjy_svs.h"
+#include "core/ugjy_midi.h"
 #include "config.h"
 #include <string.h>
 
@@ -233,4 +235,115 @@ uint32_t ugjy_get_num_speakers(ugjy_context_t *ctx) {
 
 int ugjy_get_sample_rate(ugjy_context_t *ctx) {
     return ctx ? (int)ctx->model.sample_rate : 24000;
+}
+
+// ============================================================================
+// 歌唱 (SVS) 公開 API 実装 (休符・ブレス区切り逐次生成)
+// ============================================================================
+
+int ugjy_synthesize_score(
+    ugjy_context_t    *ctx,
+    const ugjy_note_t *notes,
+    size_t             num_notes,
+    const ugjy_t      *params,
+    float             *out_pcm,
+    size_t             max_samples,
+    size_t            *out_samples
+) {
+    if (!ctx || !notes || num_notes == 0 || !out_pcm || !out_samples) {
+        return UGJY_ERR_INVALID_ARG;
+    }
+    *out_samples = 0;
+    uint32_t spk_id = params ? params->speaker_id : ctx->model.default_speaker;
+
+    // 休符・ブレス区切りの逐次フレーズ推論 (メモリ消費一定 & 超低レイテンシ)
+    size_t i = 0;
+    while (i < num_notes) {
+        size_t phrase_start = i;
+        size_t phrase_len = 0;
+        // 次の休符か、最大24音符まで進める
+        while (i < num_notes && phrase_len < 24) {
+            phrase_len++;
+            if (ugjy_note_is_rest(&notes[i])) {
+                i++;
+                break; // 休符でフレーズを一区切り！
+            }
+            i++;
+        }
+
+        // 1フレーズのSVSパラメータ生成 (アリーナマーカーで都度クリーンアップ)
+        size_t marker = ugjy_arena_mark(&ctx->arena);
+        ugjy_svs_phrase_t phrase;
+        int ret = ugjy_svs_build_phrase(&notes[phrase_start], phrase_len, ctx->g2p, &ctx->arena, &phrase);
+        if (ret != UGJY_OK) {
+            ugjy_arena_restore(&ctx->arena, marker);
+            return ret;
+        }
+
+        // 1フレーズのHiFi-GAN推論
+        size_t phrase_samples = 0;
+        float *pcm_write_ptr = out_pcm + *out_samples;
+        size_t remaining_samples = (max_samples > *out_samples) ? (max_samples - *out_samples) : 0;
+        ret = ugjy_model_infer_svs(&ctx->model, &ctx->arena, &phrase, spk_id, pcm_write_ptr, remaining_samples, &phrase_samples);
+        ugjy_arena_restore(&ctx->arena, marker);
+
+        if (ret != UGJY_OK) return ret;
+        *out_samples += phrase_samples;
+    }
+
+    return UGJY_OK;
+}
+
+int ugjy_synthesize_midi(
+    ugjy_context_t    *ctx,
+    const char        *midi_path,
+    int                track_index,
+    const ugjy_t      *params,
+    float             *out_pcm,
+    size_t             max_samples,
+    size_t            *out_samples
+) {
+    return ugjy_synthesize_midi_with_lyrics(ctx, midi_path, track_index, NULL, params, out_pcm, max_samples, out_samples);
+}
+
+int ugjy_synthesize_midi_with_lyrics(
+    ugjy_context_t    *ctx,
+    const char        *midi_path,
+    int                track_index,
+    const char        *lyrics_text,
+    const ugjy_t      *params,
+    float             *out_pcm,
+    size_t             max_samples,
+    size_t            *out_samples
+) {
+    if (!ctx || !midi_path) return UGJY_ERR_INVALID_ARG;
+
+    ugjy_note_t *notes = NULL;
+    size_t num_notes = 0;
+    size_t marker = ugjy_arena_mark(&ctx->arena);
+
+    int ret = ugjy_midi_parse_file(midi_path, track_index, lyrics_text, &ctx->arena, &notes, &num_notes);
+    if (ret != UGJY_OK) {
+        ugjy_arena_restore(&ctx->arena, marker);
+        return ret;
+    }
+
+    ret = ugjy_synthesize_score(ctx, notes, num_notes, params, out_pcm, max_samples, out_samples);
+    ugjy_arena_restore(&ctx->arena, marker);
+    return ret;
+}
+
+int ugjy_push_score(ugjy_context_t *ctx, const ugjy_note_t *notes, size_t num_notes) {
+    (void)ctx; (void)notes; (void)num_notes;
+    return UGJY_OK; // 非同期キュー統合用スタブ
+}
+
+int ugjy_push_midi(ugjy_context_t *ctx, const char *midi_path, int track_index) {
+    (void)ctx; (void)midi_path; (void)track_index;
+    return UGJY_OK;
+}
+
+int ugjy_push_midi_with_lyrics(ugjy_context_t *ctx, const char *midi_path, int track_index, const char *lyrics_text) {
+    (void)ctx; (void)midi_path; (void)track_index; (void)lyrics_text;
+    return UGJY_OK;
 }

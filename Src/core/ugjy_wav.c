@@ -1,6 +1,7 @@
 #include "ugjy_wav.h"
 #include "ugjy_error.h"
 #include <stdio.h>
+#include <math.h>
 
 void ugjy_wav_create_header(
     uint8_t header[44],
@@ -65,6 +66,24 @@ int ugjy_wav_save(
         return UGJY_ERR_IO;
     }
 
+    // ピーク値の計測とクリッピング診断
+    float max_peak = 0.0f;
+    size_t clip_count = 0;
+    for (size_t i = 0; i < num_samples; i++) {
+        float a = fabsf(pcm[i]);
+        if (a > max_peak) max_peak = a;
+        if (a > 1.0f) clip_count++;
+    }
+    printf("  [WAV診断: %s] 最大ピーク値 = %.3f, クリッピング数 = %zu / %zu サンプル\n",
+           filename, max_peak, clip_count, num_samples);
+
+    // クリッピング防止: 1.0f を超えている場合は安全マージン（-0.5dBFS = 0.95f）へ自動正規化
+    float norm_scale = 1.0f;
+    if (max_peak > 1.0f) {
+        norm_scale = 0.95f / max_peak;
+        printf("  [WAV保護] クリッピングを回避するため自動ノーマライズ (x%.3f) を適用しました。\n", norm_scale);
+    }
+
     #define CHUNK_SAMPLES 1024
     int16_t chunk[CHUNK_SAMPLES];
     size_t remaining = num_samples;
@@ -74,7 +93,7 @@ int ugjy_wav_save(
         size_t batch = (remaining > CHUNK_SAMPLES) ? CHUNK_SAMPLES : remaining;
 
         for (size_t i = 0; i < batch; i++) {
-            float s = pcm[offset + i];
+            float s = pcm[offset + i] * norm_scale;
 
             // クリッピング
             if (s > 1.0f) s = 1.0f;

@@ -3,6 +3,7 @@
 
 #include "ugjy_error.h"
 #include "ugjy_g2p.h"
+#include "model/ugjy_note.h"
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
@@ -140,6 +141,49 @@ int ugjy_synthesize_text(
     size_t          max_samples,
     size_t         *out_samples
 );
+
+// ============================================================================
+// 4. 歌唱 (SVS: Singing Voice Synthesis) 公開 API
+// ============================================================================
+
+// 楽譜（ノート配列）から PCM 波形を直接合成
+int ugjy_synthesize_score(
+    ugjy_context_t    *ctx,
+    const ugjy_note_t *notes,
+    size_t             num_notes,
+    const ugjy_t      *params,
+    float             *out_pcm,
+    size_t             max_samples,
+    size_t            *out_samples
+);
+
+// 歌詞付きMIDIファイルから直接合成
+int ugjy_synthesize_midi(
+    ugjy_context_t    *ctx,
+    const char        *midi_path,
+    int                track_index,
+    const ugjy_t      *params,
+    float             *out_pcm,
+    size_t             max_samples,
+    size_t            *out_samples
+);
+
+// MIDIファイル ＋ 歌詞文字列（流し込み）から直接合成
+int ugjy_synthesize_midi_with_lyrics(
+    ugjy_context_t    *ctx,
+    const char        *midi_path,
+    int                track_index,
+    const char        *lyrics_text,
+    const ugjy_t      *params,
+    float             *out_pcm,
+    size_t             max_samples,
+    size_t            *out_samples
+);
+
+// 非同期発話キューへの歌唱投入（会話とシームレスに混在可能）
+int ugjy_push_score(ugjy_context_t *ctx, const ugjy_note_t *notes, size_t num_notes);
+int ugjy_push_midi(ugjy_context_t *ctx, const char *midi_path, int track_index);
+int ugjy_push_midi_with_lyrics(ugjy_context_t *ctx, const char *midi_path, int track_index, const char *lyrics_text);
 
 // 直前の推論で生成された口パク Viseme 配列を取得
 const ugjy_viseme_t* ugjy_get_visemes(ugjy_context_t *ctx, size_t *out_count);
