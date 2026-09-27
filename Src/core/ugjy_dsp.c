@@ -35,20 +35,21 @@ static void apply_whisper_dsp_clean(
         pcm[i] = y0;
     }
 
-    // 2. ピーク正規化 (-2.5dBFS = 0.75f)
+    // 2. ピーク正規化 (耳元・ASMR適正音量: -7dBFS = 0.45f)
+    const float target_peak = 0.45f;
     float max_peak = 0.0f;
     for (size_t i = 0; i < num_samples; i++) {
         float a = fabsf(pcm[i]);
         if (a > max_peak) max_peak = a;
     }
-    float gain = (max_peak > 1e-6f) ? (0.75f / max_peak) : 1.0f;
+    float gain = (max_peak > 1e-6f) ? (target_peak / max_peak) : 1.0f;
     for (size_t i = 0; i < num_samples; i++) {
         pcm[i] *= gain;
     }
 
     // 3. 無音判定フレームの出力ゲート処理 (memset による完全消音)
     // 正規化後の最大ピークに対する相対しきい値 (2.5%) で息継ぎ・無音区間を判定
-    const float silence_thresh = 0.75f * 0.025f; // 0.01875f
+    const float silence_thresh = target_peak * 0.025f; // 0.01125f
     const size_t frame_sz = 512;
     const size_t fade_len = 240; // 5ms クロスフェード (語尾の段差・プチつき防止)
     bool prev_silent = true;
