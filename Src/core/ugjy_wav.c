@@ -80,8 +80,9 @@ int ugjy_wav_save(
             if (s > 1.0f) s = 1.0f;
             else if (s < -1.0f) s = -1.0f;
 
-            // 16bit PCMに変換
-            chunk[i] = (int16_t)(s * 32767.0f);
+            // 16bit PCMに変換 (四捨五入・最近傍丸めで砂嵐・量子化バイアスを排除)
+            float val = s * 32767.0f;
+            chunk[i] = (int16_t)(val >= 0.0f ? (val + 0.5f) : (val - 0.5f));
         }
 
         if (fwrite(chunk, sizeof(int16_t), batch, fp) != batch) {

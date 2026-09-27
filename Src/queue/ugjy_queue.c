@@ -15,32 +15,27 @@ static void on_sentence_sliced(const char *sentence, void *user_data) {
 static void* queue_worker_thread(void *arg) {
     ugjy_queue_t *q = (ugjy_queue_t *)arg;
     char text[UGJY_FIFO_ITEM_MAX_LEN];
-
     while (atomic_load(&q->is_running)) {
+        // FIFOから単語を取り出す (空なら待機)
         if (ugjy_fifo_pop(&q->fifo, text, sizeof(text), &q->is_running) != UGJY_OK) break;
-
         atomic_store(&q->is_busy, true);
         if (atomic_load(&q->is_interrupted)) {
             atomic_store(&q->is_busy, false);
             continue;
         }
-
-        strncpy(q->current_text, text, sizeof(q->current_text) - 1);
-        q->current_text[sizeof(q->current_text) - 1] = '\0';
-
+        // ここで単語を合成 → 内部で ugjy_dsp_postprocess が呼ばれる
         size_t samples = 0, visemes = 0;
-        int ret = ugjy_synth_process(&q->synth, text, q->pcm_buf, UGJY_SYNTH_MAX_SAMPLES, &samples, q->viseme_buf, UGJY_SYNTH_MAX_VISEMES, &visemes);
+        int ret = ugjy_synth_process(&q->synth, text, q->pcm_buf, UGJY_SYNTH_MAX_SAMPLES, 
+                                     &samples, q->viseme_buf, UGJY_SYNTH_MAX_VISEMES, &visemes);
         if (ret != UGJY_OK || samples == 0 || atomic_load(&q->is_interrupted)) {
             atomic_store(&q->is_busy, false);
             continue;
         }
-
         atomic_store(&q->is_speaking, true);
+        // 再生コールバックへ送信
         if (q->callback) q->callback(text, q->pcm_buf, samples, q->viseme_buf, visemes, q->user_data);
-
         atomic_store(&q->is_speaking, false);
         atomic_store(&q->is_busy, false);
-        q->current_text[0] = '\0';
     }
     return NULL;
 }

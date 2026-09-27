@@ -6,6 +6,7 @@
 #include <stdbool.h>
 #include "ugjy_arena.h"
 #include "ugjy_onnx.h"
+#include "ugjy_dsp.h"
 #include "ugjy.h"
 
 #ifdef __cplusplus
@@ -21,6 +22,7 @@ typedef struct {
     uint32_t            default_speaker;// 4 (つくよみちゃん「おしとやかv3」)
     ugjy_viseme_t       visemes[2048];
     size_t              num_visemes;
+    ugjy_dsp_state_t    dsp_state;
 } ugjy_model_t;
 
 // 推論リクエスト構造体

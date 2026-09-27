@@ -71,8 +71,8 @@ static int on_chunk(
         }
         sent += to_write;
 
-        // 1フレーム 512 サンプル -> sent >> 9 で除算排除
-        size_t frame_idx = sent >> 9;
+        // 1フレーム 512 サンプル -> (sent + 256) >> 9 で最近傍四捨五入
+        size_t frame_idx = (sent + 256) >> 9;
         if (frame_idx >= num_visemes && num_visemes > 0) frame_idx = num_visemes - 1;
 
         if (num_visemes > 0) {
@@ -156,6 +156,28 @@ int main(void) {
     ugjy_push(ctx, "今日も一日、本当にお疲れ様…ふふっ。");
     ugjy_wait_idle(ctx);
     printf("\n✨ ささやき発話が完了しました。\n");
+
+    // 音声ファイルとしても保存 (Zero-Allocation: 静的バッファを使用)
+    static float s_wav_pcm[48000 * 10];
+    size_t wav_samples = 0;
+    {
+        ugjy_t p_save = UGJY_DEFAULT_PARAMS;
+        p_save.speaker_id = 0;
+        p_save.style = UGJY_STYLE_NORMAL;
+        p_save.speed = 1.05f;
+        p_save.emotion = UGJY_MOOD_HAPPY;
+        if (ugjy_synthesize_text(ctx, "こんにちは！私の名前はツクヨミちゃんです！よろしくね！", "ja", &p_save, s_wav_pcm, 48000 * 10, &wav_samples) == UGJY_OK) {
+            ugjy_write_wav("normal.wav", s_wav_pcm, wav_samples, 48000);
+            printf("💾 normal.wav を保存しました (%zu サンプル)\n", wav_samples);
+        }
+
+        p_save.style = UGJY_STYLE_WHISPER;
+        p_save.speed = 0.95f;
+        if (ugjy_synthesize_text(ctx, "内緒のお話だよ…今日も一日、本当にお疲れ様…ふふっ。", "ja", &p_save, s_wav_pcm, 48000 * 10, &wav_samples) == UGJY_OK) {
+            ugjy_write_wav("whisper.wav", s_wav_pcm, wav_samples, 48000);
+            printf("💾 whisper.wav を保存しました (%zu サンプル)\n", wav_samples);
+        }
+    }
 
     // クリーンアップ
     ugjy_destroy(ctx);

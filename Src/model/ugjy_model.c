@@ -41,7 +41,7 @@ int ugjy_model_load(
     }
 
     model->sample_rate = 48000;
-    model->default_speaker = 4; // つくよみちゃん「おしとやかv3」
+    model->default_speaker = 0; // スロット 0: ノーマル (つくよみ×アミ喜び)
 
     return UGJY_OK;
 }
@@ -313,6 +313,9 @@ int ugjy_model_infer(
     int ret = UGJY_OK;
 
     int64_t speaker_id = (req->speaker_id > 0) ? (int64_t)req->speaker_id : (int64_t)model->default_speaker;
+    if (req->style == UGJY_STYLE_WHISPER) {
+        speaker_id = 1; // ベイクされたささやき (ASMR) 専用スロット
+    }
     float speed = (req->speed > 0.0f) ? req->speed : 1.0f;
 
     // Step 1: Embedder 推論 (音素埋め込み)
@@ -367,6 +370,46 @@ int ugjy_model_infer(
     ret = ugjy_prosody_process(lr_pitches, total_frames, temp_pitches, req->emotion, req->style);
     if (ret != UGJY_OK) goto cleanup;
 
+    // 囁きモード: prosody加工完了後に無声区間（0.0f）のみ極小ディザを注入
+    // prosody_process 通過後なので mean_log_f0 計算には一切影響しない
+    if (req->style == UGJY_STYLE_WHISPER) {
+        uint32_t rng_uv = 0xDEADBEEFu;
+        for (size_t f = 0; f < total_frames; f++) {
+            if (lr_pitches[f] == 0.0f) {
+                rng_uv = rng_uv * 1664525u + 1013904223u;
+                // 極小値（HiFi-GANが無声として認識する範囲内、励起ノイズを抑えるため約1/4に低減）
+                lr_pitches[f] = 0.0008f + ((float)(rng_uv & 0xFF) / 255.0f) * 0.0005f;
+            }
+        }
+    }
+
+    // ピッチ遷移スムージング: voiced↔unvoiced 境界の急峻な崖を3フレームかけて線形補間
+    // HiFi-GAN転置畳み込みの崖によるリンギング（カサカサ・チリチリ）を低減
+    if (req->style == UGJY_STYLE_WHISPER) {
+        const size_t ramp = 3; // 前後3フレーム ≈ 32ms
+        // Forward pass: voiced→unvoiced フェードアウト
+        for (size_t f = 0; f + 1 < total_frames; f++) {
+            if (lr_pitches[f] > 0.01f && lr_pitches[f + 1] <= 0.01f) {
+                float base = lr_pitches[f];
+                for (size_t r = 1; r <= ramp && f + r < total_frames; r++) {
+                    float t = (float)r / (float)(ramp + 1);
+                    lr_pitches[f + r] = base * (1.0f - t);
+                }
+            }
+        }
+        // Backward pass: unvoiced→voiced フェードイン
+        for (size_t f = total_frames; f > 0; f--) {
+            size_t fi = f - 1;
+            if (lr_pitches[fi] > 0.01f && fi > 0 && lr_pitches[fi - 1] <= 0.01f) {
+                float base = lr_pitches[fi];
+                for (size_t r = 1; r <= ramp && fi >= r; r++) {
+                    float t = (float)r / (float)(ramp + 1);
+                    lr_pitches[fi - r] = base * (1.0f - t);
+                }
+            }
+        }
+    }
+
     // Step 7: Decoder 推論 (HiFi-GAN 波形生成)
     OrtValue *t_wav = NULL;
     float *wav_data = NULL;
@@ -380,7 +423,7 @@ int ugjy_model_infer(
     memcpy(out_pcm, wav_data, copy_samples * sizeof(float));
     model->decoder.api->ReleaseValue(t_wav);
 
-    ugjy_dsp_postprocess(out_pcm, copy_samples, model->sample_rate, req->style);
+    ugjy_dsp_postprocess(out_pcm, copy_samples, model->sample_rate, req->style, &model->dsp_state, arena);
     *out_samples = copy_samples;
 
 cleanup:

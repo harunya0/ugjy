@@ -63,8 +63,8 @@ int ugjy_synth_process(
         samples += pause_samples;
     }
 
-    // 1フレーム 512 サンプル -> samples >> 9 で高速計算 (/ 512 の完全排除)
-    size_t total_visemes = samples >> 9;
+    // 1フレーム 512 サンプル -> (samples + 256) >> 9 で最近傍丸め高速計算
+    size_t total_visemes = (samples + 256) >> 9;
     if (out_visemes) {
         if (total_visemes > max_visemes) total_visemes = max_visemes;
         for (size_t k = viseme_count; k < total_visemes; k++) {

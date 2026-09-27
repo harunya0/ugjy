@@ -69,15 +69,6 @@ int ugjy_prosody_process(
     uint8_t      style
 ) {
     if (!pitches || total_frames == 0) return UGJY_ERR_INVALID_ARG;
-
-    // ささやき声 (Whisper / ASMR): 声帯の有声振動を完全オフにする
-    if (style == UGJY_STYLE_WHISPER) {
-        for (size_t f = 0; f < total_frames; f++) {
-            pitches[f] = 0.0f;
-        }
-        return UGJY_OK;
-    }
-
     if (!temp_buf) return UGJY_ERR_OUT_OF_MEMORY;
 
     // 1. 声帯の慣性平滑化（カクつき・詰まり音解消）
@@ -100,25 +91,34 @@ int ugjy_prosody_process(
     float intonation_scale = 1.05f;
     float flutter_depth    = 0.008f;
 
-    switch (emotion) {
-        case 1: // UGJY_MOOD_HAPPY: 嬉しい・上機嫌
-            pitch_shift = -0.06f;
-            intonation_scale = 1.10f;
-            break;
-        case 2: // UGJY_MOOD_ANGRY: 怒り・不機嫌
-            pitch_shift = -0.10f;
-            intonation_scale = 1.10f;
-            break;
-        case 3: // UGJY_MOOD_SAD: 悲しい・落ち込み
-            pitch_shift = -0.10f;
-            intonation_scale = 0.85f;
-            break;
-        case 4: // UGJY_MOOD_RELAXED: まったり
-            pitch_shift = -0.09f;
-            intonation_scale = 0.98f;
-            break;
-        default: // UGJY_MOOD_NORMAL
-            break;
+    if (style == UGJY_STYLE_WHISPER) {
+        // ささやき声: ピッチを低め・揺らぎ最小に抑えつつ
+        // HiFi-GAN が見たことのない「完全ゼロブロック連続」を回避するため
+        // 有声区間は -0.20f シフト後もゼロにはせず微小値を保持
+        pitch_shift      = -0.20f;
+        intonation_scale = 0.55f;   // 20% → 55%: ゼロ近傍への圧縮を緩和
+        flutter_depth    = 0.015f;  // 揺らぎを増やして均一ブロック境界を解消
+    } else {
+        switch (emotion) {
+            case 1: // UGJY_MOOD_HAPPY: 嬉しい・上機嫌
+                pitch_shift = -0.06f;
+                intonation_scale = 1.10f;
+                break;
+            case 2: // UGJY_MOOD_ANGRY: 怒り・不機嫌
+                pitch_shift = -0.10f;
+                intonation_scale = 1.10f;
+                break;
+            case 3: // UGJY_MOOD_SAD: 悲しい・落ち込み
+                pitch_shift = -0.10f;
+                intonation_scale = 0.85f;
+                break;
+            case 4: // UGJY_MOOD_RELAXED: まったり
+                pitch_shift = -0.09f;
+                intonation_scale = 0.98f;
+                break;
+            default: // UGJY_MOOD_NORMAL
+                break;
+        }
     }
 
     float f0_sum = 0.0f;
