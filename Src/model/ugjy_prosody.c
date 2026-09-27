@@ -92,12 +92,11 @@ int ugjy_prosody_process(
     float flutter_depth    = 0.008f;
 
     if (style == UGJY_STYLE_WHISPER) {
-        // ささやき声: ピッチを低め・揺らぎ最小に抑えつつ
-        // HiFi-GAN が見たことのない「完全ゼロブロック連続」を回避するため
-        // 有声区間は -0.20f シフト後もゼロにはせず微小値を保持
-        pitch_shift      = -0.20f;
-        intonation_scale = 0.55f;   // 20% → 55%: ゼロ近傍への圧縮を緩和
-        flutter_depth    = 0.015f;  // 揺らぎを増やして均一ブロック境界を解消
+        // ささやき声: 人為的な低音化と抑揚抑制を撤廃
+        // speaker_id=1 が学習した本来の自然な韻律をそのまま活かす
+        pitch_shift      = -0.08f;
+        intonation_scale = 1.00f;
+        flutter_depth    = 0.008f;
     } else {
         switch (emotion) {
             case 1: // UGJY_MOOD_HAPPY: 嬉しい・上機嫌
