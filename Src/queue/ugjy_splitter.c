@@ -1,41 +1,98 @@
 #include "ugjy_splitter.h"
 #include <string.h>
 #include <stdio.h>
+#include <stdbool.h>
 
-// UTF-8 句読点検知（強い区切りは即切り、読点は約45バイト未満ならためる）
+// 発音可能な文字（ASCII英数字、または全角文字等）を含むか判定
+static bool has_pronounceable_chars(const char *str, size_t len) {
+    for (size_t i = 0; i < len; i++) {
+        uint8_t c = (uint8_t)str[i];
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r' ||
+            c == '!' || c == '?' || c == '.' || c == ',' || c == '-' || c == '~') {
+            continue;
+        }
+        // 全角記号の除外チェック: 「！」(EF BC 81) / 「？」(EF BC 9F) / 「。」(E3 80 82) / 「、」(E3 80 81) / 「…」(E2 80 A6) / 全角空白 (E3 80 80)
+        if (i + 2 < len) {
+            if (c == 0xEF && (uint8_t)str[i+1] == 0xBC && ((uint8_t)str[i+2] == 0x81 || (uint8_t)str[i+2] == 0x9F)) {
+                i += 2; continue;
+            }
+            if (c == 0xE3 && (uint8_t)str[i+1] == 0x80 && ((uint8_t)str[i+2] == 0x80 || (uint8_t)str[i+2] == 0x81 || (uint8_t)str[i+2] == 0x82)) {
+                i += 2; continue;
+            }
+            if (c == 0xE2 && (uint8_t)str[i+1] == 0x80 && (uint8_t)str[i+2] == 0xA6) {
+                i += 2; continue;
+            }
+        }
+        return true; // 発音可能なテキストが存在
+    }
+    return false;
+}
+
+// 連続する記号・空白を同一の文末としてまとめて消費
+static size_t consume_trailing_delimiters(const char *buf, size_t len, size_t start) {
+    size_t i = start;
+    while (i < len) {
+        uint8_t c = (uint8_t)buf[i];
+        if (c == '!' || c == '?' || c == '.' || c == '\n' || c == '\r' || c == ' ' || c == '\t') {
+            i++;
+            continue;
+        }
+        if (i + 2 < len) {
+            // 全角 「！」/「？」
+            if (c == 0xEF && (uint8_t)buf[i+1] == 0xBC && ((uint8_t)buf[i+2] == 0x81 || (uint8_t)buf[i+2] == 0x9F)) {
+                i += 3;
+                continue;
+            }
+            // 全角 「。」/「、」/ 全角空白
+            if (c == 0xE3 && (uint8_t)buf[i+1] == 0x80 && ((uint8_t)buf[i+2] == 0x80 || (uint8_t)buf[i+2] == 0x81 || (uint8_t)buf[i+2] == 0x82)) {
+                i += 3;
+                continue;
+            }
+            // 三点リーダー
+            if (c == 0xE2 && (uint8_t)buf[i+1] == 0x80 && (uint8_t)buf[i+2] == 0xA6) {
+                i += 3;
+                continue;
+            }
+        }
+        break;
+    }
+    return i;
+}
+
+// UTF-8 句読点検知（強い区切りは連続記号を含めて切り出し、読点は約45バイト未満ならためる）
 static size_t find_delimiter_end(const char *buf, size_t len) {
     for (size_t i = 0; i < len; i++) {
         uint8_t c = (uint8_t)buf[i];
-        // 1バイト 強い区切り: 改行, 感嘆符, 疑問符, ピリオド（即切り）
+        // 1バイト 強い区切り: 改行, 感嘆符, 疑問符, ピリオド
         if (c == '\n' || c == '\r' || c == '!' || c == '?' || c == '.') {
-            return i + 1;
+            return consume_trailing_delimiters(buf, len, i + 1);
         }
-        // 1バイト 弱い区切り: カンマ (45バイト以上たまっていれば切る、未満ならスキップ)
+        // 1バイト 弱い区切り: カンマ (45バイト以上たまっていれば切る)
         if (c == ',') {
-            if (i + 1 >= 45) return i + 1;
+            if (i + 1 >= 45) return consume_trailing_delimiters(buf, len, i + 1);
             continue;
         }
         // 3バイト UTF-8 日本語句読点: 「、」(E3 80 81) / 「。」(E3 80 82)
         if (i + 2 < len && c == 0xE3 && (uint8_t)buf[i + 1] == 0x80) {
             uint8_t c2 = (uint8_t)buf[i + 2];
             if (c2 == 0x82) {
-                // 句点「。」: 強い区切り（即切り）
-                return i + 3;
+                return consume_trailing_delimiters(buf, len, i + 3);
             }
             if (c2 == 0x81) {
-                // 読点「、」: 弱い区切り (45バイト以上たまっていれば切る、未満ならスキップ)
-                if (i + 3 >= 45) return i + 3;
+                if (i + 3 >= 45) return consume_trailing_delimiters(buf, len, i + 3);
                 continue;
             }
         }
         // 3バイト 全角「！」(EF BC 81) / 「？」(EF BC 9F)
         if (i + 2 < len && c == 0xEF && (uint8_t)buf[i + 1] == 0xBC) {
             uint8_t c2 = (uint8_t)buf[i + 2];
-            if (c2 == 0x81 || c2 == 0x9F) return i + 3;
+            if (c2 == 0x81 || c2 == 0x9F) {
+                return consume_trailing_delimiters(buf, len, i + 3);
+            }
         }
         // 3バイト 三点リーダー「…」(E2 80 A6)
         if (i + 2 < len && c == 0xE2 && (uint8_t)buf[i + 1] == 0x80 && (uint8_t)buf[i + 2] == 0xA6) {
-            return i + 3;
+            return consume_trailing_delimiters(buf, len, i + 3);
         }
     }
     return 0;
@@ -91,7 +148,8 @@ void ugjy_splitter_feed(ugjy_splitter_t *s, const char *token) {
         s->len = (uint32_t)rem;
         s->buf[s->len] = '\0';
 
-        if (s->on_sentence) {
+        // 発音可能な文字を含んでいる場合のみキューに投入（記号だけの空文を破棄）
+        if (s->on_sentence && has_pronounceable_chars(sentence, delim_end)) {
             s->on_sentence(sentence, s->user_data);
         }
     }
@@ -100,7 +158,9 @@ void ugjy_splitter_feed(ugjy_splitter_t *s, const char *token) {
 void ugjy_splitter_flush(ugjy_splitter_t *s) {
     if (!s) return;
     if (s->len > 0 && s->on_sentence) {
-        s->on_sentence(s->buf, s->user_data);
+        if (has_pronounceable_chars(s->buf, s->len)) {
+            s->on_sentence(s->buf, s->user_data);
+        }
         s->len = 0;
         s->buf[0] = '\0';
     }

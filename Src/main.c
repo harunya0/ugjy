@@ -162,6 +162,37 @@ int main(void) {
             ugjy_write_wav("normal.wav", s_wav_pcm, wav_samples, 48000);
             printf("💾 normal.wav を保存しました (%zu サンプル)\n", wav_samples);
         }
+        p_save.style = UGJY_STYLE_WHISPER;
+        p_save.speed = 0.95f;
+        if (ugjy_synthesize_text(ctx, "内緒のお話だよ…今日も一日、本当にお疲れ様…ふふっ。", "ja", &p_save, s_wav_pcm, 48000 * 10, &wav_samples) == UGJY_OK) {
+            ugjy_write_wav("whisper.wav", s_wav_pcm, wav_samples, 48000);
+            printf("💾 whisper.wav を保存しました (%zu サンプル)\n", wav_samples);
+        }
+
+        // 3. 歌唱 (SVS) デモ: かえるの合唱（ドレミファミレド〜）
+        printf("\n>>> 歌唱 (SVS / Singing) テスト <<<\n");
+        ugjy_note_t song[] = {
+            {.lyric = "か", .key = 60, .duration_ms = 350, .vibrato = 2},
+            {.lyric = "え", .key = 62, .duration_ms = 350, .vibrato = 2},
+            {.lyric = "る", .key = 64, .duration_ms = 350, .vibrato = 2},
+            {.lyric = "の", .key = 65, .duration_ms = 350, .vibrato = 2},
+            {.lyric = "う", .key = 64, .duration_ms = 350, .vibrato = 2},
+            {.lyric = "た", .key = 62, .duration_ms = 350, .vibrato = 2},
+            {.lyric = "が", .key = 60, .duration_ms = 700, .vibrato = 3},
+            {.lyric = "き", .key = 64, .duration_ms = 350, .vibrato = 2},
+            {.lyric = "こ", .key = 65, .duration_ms = 350, .vibrato = 2},
+            {.lyric = "え", .key = 67, .duration_ms = 350, .vibrato = 2},
+            {.lyric = "て", .key = 69, .duration_ms = 350, .vibrato = 2},
+            {.lyric = "く", .key = 67, .duration_ms = 350, .vibrato = 2},
+            {.lyric = "る", .key = 65, .duration_ms = 350, .vibrato = 2},
+            {.lyric = "よ", .key = 64, .duration_ms = 700, .vibrato = 3},
+        };
+        size_t song_notes = sizeof(song) / sizeof(song[0]);
+        p_save.style = UGJY_STYLE_SINGING;
+        if (ugjy_synthesize_score(ctx, song, song_notes, &p_save, s_wav_pcm, 48000 * 10, &wav_samples) == UGJY_OK) {
+            ugjy_write_wav("sing.wav", s_wav_pcm, wav_samples, 48000);
+            printf("💾 sing.wav を保存しました (%zu サンプル)\n", wav_samples);
+        }
     }
 
     // クリーンアップ

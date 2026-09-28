@@ -40,11 +40,15 @@ size_t ugjy_prosody_compute_frames(
         // 句読点（、や！、。）のポーズ時間補正ルール
         if (tokens[i] == 0) {
             if (i > 0 && i + 1 < num_tokens) {
-                if (dur_sec < 0.22f) dur_sec = 0.22f; // 中間の読点ポーズ
+                if (dur_sec < 0.15f) dur_sec = 0.30f; // 中間の読点ポーズ (下限)
+                if (dur_sec > 0.28f) dur_sec = 0.35f; // 中間の読点ポーズ (上限: 伸びすぎ防止)
             } else if (i == 0) {
-                if (dur_sec < 0.08f) dur_sec = 0.08f; // 文頭の微小ポーズ
+                if (dur_sec < 0.05f) dur_sec = 0.08f; // 文頭の微小ポーズ
+                if (dur_sec > 0.08f) dur_sec = 0.10f;
             } else {
-                if (dur_sec < 0.18f) dur_sec = 0.18f; // 文末の余韻ポーズ
+                // 文末の余韻ポーズ: 適度な間を持たせつつ、長すぎる停滞を防ぐ (0.18s〜0.25s)
+                if (dur_sec < 0.18f) dur_sec = 0.18f;
+                if (dur_sec > 0.25f) dur_sec = 0.25f;
             }
         }
 
