@@ -59,28 +59,19 @@ static size_t consume_trailing_delimiters(const char *buf, size_t len, size_t st
     return i;
 }
 
-// UTF-8 句読点検知（強い区切りは連続記号を含めて切り出し、読点は約45バイト未満ならためる）
+// UTF-8 句読点検知（句点・読点・感嘆符・改行等で即座に切り出し）
 static size_t find_delimiter_end(const char *buf, size_t len) {
     for (size_t i = 0; i < len; i++) {
         uint8_t c = (uint8_t)buf[i];
-        // 1バイト 強い区切り: 改行, 感嘆符, 疑問符, ピリオド
-        if (c == '\n' || c == '\r' || c == '!' || c == '?' || c == '.') {
+        // 1バイト 区切り: 改行, 感嘆符, 疑問符, ピリオド, カンマ（即切り）
+        if (c == '\n' || c == '\r' || c == '!' || c == '?' || c == '.' || c == ',') {
             return consume_trailing_delimiters(buf, len, i + 1);
         }
-        // 1バイト 弱い区切り: カンマ (45バイト以上たまっていれば切る)
-        if (c == ',') {
-            if (i + 1 >= 45) return consume_trailing_delimiters(buf, len, i + 1);
-            continue;
-        }
-        // 3バイト UTF-8 日本語句読点: 「、」(E3 80 81) / 「。」(E3 80 82)
+        // 3バイト UTF-8 日本語句読点: 「、」(E3 80 81) / 「。」(E3 80 82)（即切り）
         if (i + 2 < len && c == 0xE3 && (uint8_t)buf[i + 1] == 0x80) {
             uint8_t c2 = (uint8_t)buf[i + 2];
-            if (c2 == 0x82) {
+            if (c2 == 0x81 || c2 == 0x82) {
                 return consume_trailing_delimiters(buf, len, i + 3);
-            }
-            if (c2 == 0x81) {
-                if (i + 3 >= 45) return consume_trailing_delimiters(buf, len, i + 3);
-                continue;
             }
         }
         // 3バイト 全角「！」(EF BC 81) / 「？」(EF BC 9F)
