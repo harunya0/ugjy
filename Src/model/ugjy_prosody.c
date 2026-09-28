@@ -44,7 +44,7 @@ size_t ugjy_prosody_compute_frames(
             } else if (i == 0) {
                 if (dur_sec < 0.08f) dur_sec = 0.08f; // 文頭の微小ポーズ
             } else {
-                if (dur_sec < 0.15f) dur_sec = 0.18f; // 文末の余韻ポーズ
+                if (dur_sec < 0.18f) dur_sec = 0.18f; // 文末の余韻ポーズ
             }
         }
 
@@ -95,25 +95,25 @@ int ugjy_prosody_process(
         // ささやき声: 人為的な低音化と抑揚抑制を撤廃
         // speaker_id=1 が学習した本来の自然な韻律をそのまま活かす
         pitch_shift      = -0.08f;
-        intonation_scale = 1.00f;
+        intonation_scale = 1.5f;
         flutter_depth    = 0.008f;
     } else {
         switch (emotion) {
             case 1: // UGJY_MOOD_HAPPY: 嬉しい・上機嫌
                 pitch_shift = -0.06f;
-                intonation_scale = 1.10f;
+                intonation_scale += 0.05f;
                 break;
             case 2: // UGJY_MOOD_ANGRY: 怒り・不機嫌
                 pitch_shift = -0.10f;
-                intonation_scale = 1.10f;
+                intonation_scale += 0.05f;
                 break;
             case 3: // UGJY_MOOD_SAD: 悲しい・落ち込み
                 pitch_shift = -0.10f;
-                intonation_scale = 0.85f;
+                intonation_scale -= 0.2f;
                 break;
             case 4: // UGJY_MOOD_RELAXED: まったり
                 pitch_shift = -0.09f;
-                intonation_scale = 0.98f;
+                intonation_scale -= 0.07f;
                 break;
             default: // UGJY_MOOD_NORMAL
                 break;

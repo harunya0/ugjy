@@ -237,7 +237,7 @@ fn parse_a3(label_str: &str) -> Option<i32> {
 ///
 /// Prosody mark insertion rules:
 /// - `]` when a1==0 && a2_next == a2+1 (accent nucleus / falling pitch)
-/// - `#` when a2==a3 && a2_next==1 (accent phrase boundary)
+/// - `#` when a3==1 && a2_next==1 (accent phrase boundary)
 /// - `[` when a2==1 && a2_next==2 (rising pitch mark)
 fn labels_to_tokens_with_prosody(
     label_strings: &[String],
@@ -299,7 +299,7 @@ fn labels_to_tokens_with_prosody(
             }
 
             // Insert accent phrase boundary "#" when current mora is last in phrase
-            if a2 == a3 && a2_next == 1 {
+            if a3 == 1 && a2_next == 1 {
                 tokens.push("#".to_string());
                 prosody_info.push(None);
             }
@@ -990,10 +990,10 @@ mod tests {
 
     #[test]
     fn test_phrase_boundary_mark_inserted() {
-        // a2==a3 and a2_next==1 should insert "#"
+        // a3==1 and a2_next==1 should insert "#"
         let labels = vec![
             "xx^xx-sil+xx=xx/A:xx+xx+xx/B:xx".to_string(),
-            "xx^xx-k+xx=xx/A:1+3+3/B:xx".to_string(),
+            "xx^xx-k+xx=xx/A:1+3+1/B:xx".to_string(),
             "xx^xx-a+xx=xx/A:0+1+2/B:xx".to_string(),
             "xx^xx-sil+xx=xx/A:xx+xx+xx/B:xx".to_string(),
         ];

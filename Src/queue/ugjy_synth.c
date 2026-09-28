@@ -47,18 +47,12 @@ int ugjy_synth_process(
         memcpy(out_visemes, v, viseme_count * sizeof(ugjy_viseme_t));
     }
 
-    // ポーズ付加（掛け算・割り算をビットシフトで代替）
-    // 読点: 48000 >> 2 = 12000 サンプル (0.25秒)
-    // 句点: (48000 >> 2) + (48000 >> 3) = 18000 サンプル (0.375秒)
+    // ポーズの二重付加防止:
+    // G2P末尾の pau によりモデル側ですでに十分な余韻ポーズ(0.18秒以上)が
+    // 生成されているため、追加の無音パディングは行わない
     size_t pause_samples = 0;
-    if (strstr(text, "。") || strstr(text, "！") || strstr(text, "？") ||
-        strstr(text, "!") || strstr(text, "?") || strstr(text, "\n")) {
-        pause_samples = (UGJY_SYNTH_SAMPLE_RATE >> 2) + (UGJY_SYNTH_SAMPLE_RATE >> 3); // 18000
-    } else if (strstr(text, "、") || strstr(text, ",")) {
-        pause_samples = (UGJY_SYNTH_SAMPLE_RATE >> 2); // 12000
-    }
 
-    if (samples + pause_samples < max_pcm_samples) {
+    if (pause_samples > 0 && samples + pause_samples < max_pcm_samples) {
         memset(out_pcm + samples, 0, pause_samples * sizeof(float));
         samples += pause_samples;
     }

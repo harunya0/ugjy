@@ -99,8 +99,10 @@ pub fn extract_sharevox_features(labels: &[String]) -> (Vec<i64>, Vec<i64>) {
         };
 
         // 3. アクセント記号の厳密判定 (公式コード完全移植)
+        // 音素が母音系(a, i, u, e, o, A, I, U, E, O, N, cl)の場合のみ句境界判定を行う
+        let is_vowel_like = matches!(p3, "a" | "i" | "u" | "e" | "o" | "A" | "I" | "U" | "E" | "O" | "N" | "cl");
         // ① アクセント句境界 または 文末
-        if (a3 == 1 && (a2_next == 1 || next_is_pau)) || n == n_labels - 2 {
+        if ((a3 == 1 && (a2_next == 1 || next_is_pau)) || n == n_labels - 2) && is_vowel_like {
             let f3 = numeric_feature(&RE_F3, lab_curr);
             if f3 == 1 {
                 accent_strs.push("?".to_string()); // 疑問文末尾
@@ -130,7 +132,13 @@ pub fn extract_sharevox_features(labels: &[String]) -> (Vec<i64>, Vec<i64>) {
     // 文字列から ID へのマッピング
     let phoneme_ids: Vec<i64> = phoneme_strs
         .iter()
-        .map(|s| *PHONEME_MAP.get(s.as_str()).unwrap_or(&0))
+        .map(|s| match PHONEME_MAP.get(s.as_str()) {
+            Some(&id) => id,
+            None => {
+                eprintln!("[WARN sharevox] 未知の音素 '{}' を検出しました (pau にフォールバック)", s);
+                0
+            }
+        })
         .collect();
 
     let accent_ids: Vec<i64> = accent_strs

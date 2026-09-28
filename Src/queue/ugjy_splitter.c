@@ -1,18 +1,32 @@
 #include "ugjy_splitter.h"
 #include <string.h>
+#include <stdio.h>
 
-// UTF-8 句読点検知（ビットマスク・高速判定）
+// UTF-8 句読点検知（強い区切りは即切り、読点は約45バイト未満ならためる）
 static size_t find_delimiter_end(const char *buf, size_t len) {
     for (size_t i = 0; i < len; i++) {
         uint8_t c = (uint8_t)buf[i];
-        // 1バイト記号: 改行, 感嘆符, 疑問符, ピリオド, カンマ
-        if (c == '\n' || c == '\r' || c == '!' || c == '?' || c == '.' || c == ',') {
+        // 1バイト 強い区切り: 改行, 感嘆符, 疑問符, ピリオド（即切り）
+        if (c == '\n' || c == '\r' || c == '!' || c == '?' || c == '.') {
             return i + 1;
+        }
+        // 1バイト 弱い区切り: カンマ (45バイト以上たまっていれば切る、未満ならスキップ)
+        if (c == ',') {
+            if (i + 1 >= 45) return i + 1;
+            continue;
         }
         // 3バイト UTF-8 日本語句読点: 「、」(E3 80 81) / 「。」(E3 80 82)
         if (i + 2 < len && c == 0xE3 && (uint8_t)buf[i + 1] == 0x80) {
             uint8_t c2 = (uint8_t)buf[i + 2];
-            if (c2 == 0x81 || c2 == 0x82) return i + 3;
+            if (c2 == 0x82) {
+                // 句点「。」: 強い区切り（即切り）
+                return i + 3;
+            }
+            if (c2 == 0x81) {
+                // 読点「、」: 弱い区切り (45バイト以上たまっていれば切る、未満ならスキップ)
+                if (i + 3 >= 45) return i + 3;
+                continue;
+            }
         }
         // 3バイト 全角「！」(EF BC 81) / 「？」(EF BC 9F)
         if (i + 2 < len && c == 0xEF && (uint8_t)buf[i + 1] == 0xBC) {
@@ -55,8 +69,8 @@ void ugjy_splitter_feed(ugjy_splitter_t *s, const char *token) {
     // 句読点検知ループ
     while (s->len > 0) {
         size_t delim_end = find_delimiter_end(s->buf, s->len);
-        if (delim_end == 0 && s->len >= 120) {
-            delim_end = 90;
+        if (delim_end == 0 && s->len >= 300) {
+            delim_end = 240;
             // UTF-8 の境界判定 (上位2ビットが 10 = 0x80 は後続バイト)
             while (delim_end < s->len && ((uint8_t)s->buf[delim_end] & 0xC0) == 0x80) {
                 delim_end++;

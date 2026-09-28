@@ -10,7 +10,7 @@ extern "C" {
 #include "ugjy.h"
 
 #define UGJY_SYNTH_SAMPLE_RATE 48000
-#define UGJY_SYNTH_MAX_SAMPLES (UGJY_SYNTH_SAMPLE_RATE * 4) // 最大4秒分
+#define UGJY_SYNTH_MAX_SAMPLES (UGJY_SYNTH_SAMPLE_RATE * 10) // 最大10秒分 (480000サンプル)
 #define UGJY_SYNTH_MAX_VISEMES 4096
 
 // 単一文の音声合成器 (スレッド/キュー非依存)

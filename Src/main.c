@@ -5,8 +5,8 @@
 #include <time.h>
 #include "ugjy.h"
 
-// 4MB 静的アリーナ (queue インスタンスバッファ + 推論ワーキング領域)
-static uint8_t g_memory_pool[4 * 1024 * 1024];
+// 16MB 静的アリーナ (queue インスタンスバッファ + 推論ワーキング領域)
+static uint8_t g_memory_pool[16 * 1024 * 1024];
 
 typedef struct {
     FILE           *audio_pipe;
@@ -51,7 +51,8 @@ static int on_chunk(
     void                *user_data
 ) {
     app_context_t *app = (app_context_t *)user_data;
-    printf("\n  ▶ [発声開始] \"%s\" (待機キュー: %u件)\n", text, ugjy_get_queue_count(app->ctx));
+    printf("\n  ▶ [発声開始] \"%s\" (待機キュー: %u件, samples=%zu / %.2fs)\n",
+           text, ugjy_get_queue_count(app->ctx), num_samples, (double)num_samples / 48000.0);
 
     size_t sent = 0;
     struct timespec ts = {.tv_sec = 0, .tv_nsec = 30000000}; // 30ms
@@ -125,8 +126,10 @@ int main(void) {
     // LLM トークンストリーム投入（句読点検知で自動キューイング＆非同期発声）
     const char *tokens[] = {
         "こんにちは！",
-        "私の", "名前は", "ツクヨミちゃんです！",
-        "よろしくね！"
+        "私はAIアシスタントで、",
+        "質問に答えるだけでなく、",
+        "様々な情報を提供したり、",
+        "人間の役立つ情報を探したりもします。"
     };
     int num_tokens = sizeof(tokens) / sizeof(tokens[0]);
 
@@ -146,19 +149,8 @@ int main(void) {
     ugjy_wait_idle(ctx);
     printf("\n✨ 通常発話が完了しました。\n");
 
-    // 2. ささやき声 (ASMR / ウィスパー) のデモ
-    printf("\n>>> ささやき (ASMR / Whisper) 発声テスト <<<\n");
-    params.style = UGJY_STYLE_WHISPER;
-    params.speed = 0.95f;
-    ugjy_start(ctx, &params, on_chunk, &app);
-
-    ugjy_push(ctx, "内緒のお話だよ…");
-    ugjy_push(ctx, "今日も一日、本当にお疲れ様…ふふっ。");
-    ugjy_wait_idle(ctx);
-    printf("\n✨ ささやき発話が完了しました。\n");
-
     // 音声ファイルとしても保存 (Zero-Allocation: 静的バッファを使用)
-    static float s_wav_pcm[48000 * 10];
+    static float s_wav_pcm[96000 * 10];
     size_t wav_samples = 0;
     {
         ugjy_t p_save = UGJY_DEFAULT_PARAMS;
@@ -166,41 +158,9 @@ int main(void) {
         p_save.style = UGJY_STYLE_NORMAL;
         p_save.speed = 1.05f;
         p_save.emotion = UGJY_MOOD_HAPPY;
-        if (ugjy_synthesize_text(ctx, "こんにちは！私の名前はツクヨミちゃんです！よろしくね！", "ja", &p_save, s_wav_pcm, 48000 * 10, &wav_samples) == UGJY_OK) {
+        if (ugjy_synthesize_text(ctx, "こんにちは！私はAIアシスタントで、質問に答えるだけでなく、様々な情報を提供したり、人間の役立つ情報を探したりもします。", "ja", &p_save, s_wav_pcm, 96000 * 10, &wav_samples) == UGJY_OK) {
             ugjy_write_wav("normal.wav", s_wav_pcm, wav_samples, 48000);
             printf("💾 normal.wav を保存しました (%zu サンプル)\n", wav_samples);
-        }
-
-        p_save.style = UGJY_STYLE_WHISPER;
-        p_save.speed = 0.95f;
-        if (ugjy_synthesize_text(ctx, "内緒のお話だよ…今日も一日、本当にお疲れ様…ふふっ。", "ja", &p_save, s_wav_pcm, 48000 * 10, &wav_samples) == UGJY_OK) {
-            ugjy_write_wav("whisper.wav", s_wav_pcm, wav_samples, 48000);
-            printf("💾 whisper.wav を保存しました (%zu サンプル)\n", wav_samples);
-        }
-
-        // 3. 歌唱 (SVS) デモ: かえるの合唱（ドレミファミレド〜）
-        printf("\n>>> 歌唱 (SVS / Singing) テスト <<<\n");
-        ugjy_note_t song[] = {
-            {.lyric = "か", .key = 60, .duration_ms = 350, .vibrato = 2},
-            {.lyric = "え", .key = 62, .duration_ms = 350, .vibrato = 2},
-            {.lyric = "る", .key = 64, .duration_ms = 350, .vibrato = 2},
-            {.lyric = "の", .key = 65, .duration_ms = 350, .vibrato = 2},
-            {.lyric = "う", .key = 64, .duration_ms = 350, .vibrato = 2},
-            {.lyric = "た", .key = 62, .duration_ms = 350, .vibrato = 2},
-            {.lyric = "が", .key = 60, .duration_ms = 700, .vibrato = 3},
-            {.lyric = "き", .key = 64, .duration_ms = 350, .vibrato = 2},
-            {.lyric = "こ", .key = 65, .duration_ms = 350, .vibrato = 2},
-            {.lyric = "え", .key = 67, .duration_ms = 350, .vibrato = 2},
-            {.lyric = "て", .key = 69, .duration_ms = 350, .vibrato = 2},
-            {.lyric = "く", .key = 67, .duration_ms = 350, .vibrato = 2},
-            {.lyric = "る", .key = 65, .duration_ms = 350, .vibrato = 2},
-            {.lyric = "よ", .key = 64, .duration_ms = 700, .vibrato = 3},
-        };
-        size_t song_notes = sizeof(song) / sizeof(song[0]);
-        p_save.style = UGJY_STYLE_SINGING;
-        if (ugjy_synthesize_score(ctx, song, song_notes, &p_save, s_wav_pcm, 48000 * 10, &wav_samples) == UGJY_OK) {
-            ugjy_write_wav("sing.wav", s_wav_pcm, wav_samples, 48000);
-            printf("💾 sing.wav を保存しました (%zu サンプル)\n", wav_samples);
         }
     }
 

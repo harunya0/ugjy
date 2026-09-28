@@ -199,6 +199,9 @@ static int step_length_regulator(
     float *lr_pitches  = (float *)ugjy_arena_alloc(arena, total_frames * sizeof(float));
     if (!lr_features || !lr_pitches) return UGJY_ERR_OUT_OF_MEMORY;
 
+    memset(lr_features, 0, total_frames * 192 * sizeof(float));
+    memset(lr_pitches, 0, total_frames * sizeof(float));
+
     size_t curr_frame = 0;
     for (size_t i = 0; i < num_tokens; i++) {
         int cnt = frame_counts[i];

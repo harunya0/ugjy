@@ -120,8 +120,10 @@ int ugjy_flush(ugjy_context_t *ctx) {
 }
 
 int ugjy_push(ugjy_context_t *ctx, const char *sentence) {
-    if (!ctx || !ctx->queue_active) return UGJY_ERR_INVALID_ARG;
-    return ugjy_queue_push(&ctx->queue, sentence);
+    if (!ctx || !ctx->queue_active || !sentence) return UGJY_ERR_INVALID_ARG;
+    int ret = ugjy_feed(ctx, sentence);
+    if (ret != UGJY_OK) return ret;
+    return ugjy_flush(ctx);
 }
 
 int ugjy_stop(ugjy_context_t *ctx) {

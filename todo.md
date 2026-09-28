@@ -1,93 +1,25 @@
-# ugjy — 目標仕様案
-# 完成
-# 次やること：
-- [x]テスト
-- []イントネーション自動調整
+## 確認するもの(ストリームの途切れ)
 
-# 以下アーカイブ
-## 最重要事項：高性能なTTSを作る、メモリ削減は最悪これの次でもよい
-1. 音声品質・別言語（特にC#とrust）からのアクセス
-2. 推論性能
-3. リアルタイム性
-4. メモリ効率
-5. バイナリサイズ
+- [x] `main.c` の `on_chunk` の先頭に `printf("samples=%zu (%.2fs)\n", num_samples, num_samples / 48000.0);` を入れて実行する。（反映済）
+- [x] `grep -n "SAMPLES\|48000\|pcm" Src/queue/*.c Inc/queue/*.h` で、`ugjy_synth_process` に渡している `max_pcm_samples` を探す。（`UGJY_SYNTH_MAX_SAMPLES` が 4秒分=192000 だった）
+- [x] 切れる位置を確認する。どのチャンクの途中で切れるのか、最後のチャンクの終わりだけなのか。->さいごの「様々な情報を提供したり、人間の役立つ情報を探したりも」できれる
+よってバッファが原因
 
-### 基本
+## 直すもの
 
-* **言語:** C
-* **推論:** ONNX
-* **用途:** ローカルTTS
-* **出力:** PCM / WAV
-* **OS:** Linux / Windows
-* **CPU:** x86-64を第一目標
-* **依存:** 最小限
+- [x] キュー側の1文あたりの PCM バッファを増やす。最長チャンクの想定は約5.4秒+ポーズなので、余裕をみて10秒(480000サンプル)以上にする。（`UGJY_SYNTH_MAX_SAMPLES` を 10秒=480000 に拡張済）
+- [x] `ugjy_model_infer` の `copy_samples` の切り捨てを、警告またはエラーにして、黙って切れないようにする。`num_wav_samples > max_samples` のときに、stderr にログを出す。（警告ログ追加済）
 
-### 音声品質
+## 抑揚の調査(まだ未解決)
 
-* 高品質TTSを目標
-* モデル側の品質を極力維持
-* INT8量子化を基本候補
-* 音声品質を犠牲にした過剰な軽量化はしない
+- [ ] `ugjy_model_infer` の Step 3 直前に、`ph`/`ac`/`f0`/`dur` のデバッグ出力を入れる。variance の予測ピッチが最初から狭いのか、後段で縮むのかを切り分ける。
+- [ ] `ugjy_prosody.c` の `intonation_scale` を 1.05 → 1.5 にして、出力 F0 の標準偏差が増えるかを見る。
+- [ ] 読点の間(現状0.42〜0.48秒)が長いと感じたら、`compute_frames` の中間ポーズに上限(例: 0.3秒)を入れて聞き比べる。
 
-### 話者・音声設定
+## 前回までの未完了
 
-```c
-typedef struct {
-    uint8_t speaker;
-    float speed;
-    float pitch;
-    float energy;
-    uint8_t emotion;
-    uint8_t style;
-} ugjy_t;
-```
-
-みたいな設定構造体を用意。
-
-```c
-ugjy_t p = ugjyDefaultP;
-
-p.speaker = 2;
-p.speed = 1.1f;
-p.pitch = 0.9f;
-```
-
-のように**デフォルトを部分的に上書き可能**。
-
-### メモリ
-
-ここが `ugjy` の本丸。
-
-* 動的メモリ確保を一切使用しない
-* 静的バッファ / arena方式を基本とする
-* 中間バッファを積極的に再利用
-* 不要なデータコピーを避ける
-* メタデータは可能な限り圧縮
-* bit packing / bit maskを積極利用
-
-そして具体的な目標として、
-
-> **通常のTTSランタイムより大幅に少ないRAMで動作する**
-
-を掲げる。
-
-数値目標は実装してから決めてもいい。
-
-### パフォーマンス
-
-* リアルタイム再生可能
-* ストリーミング生成対応
-* CPU使用率を可能な限り低減
-* SIMD最適化を検討
-* スレッド並列化を検討
-
-### API
-
-Cから簡単に使えること。
-
-```c
-ugjy_init();
-ugjy_t p = ugjyDefaultP;
-ugjy_synthesize(text, &p);
-ugjy_destroy();
-```
+- [x] `ugjy_model.c` の `step_length_regulator` のゼロクリア。（適用済）
+- [x] `compute_frames` の `< 0.15f` → `< 0.18f`。（適用済）
+- [x] ポーズの二重付加の解消(`ugjy_synth.c`)。（適用済）
+- [x] `sharevox.rs` の `#` の母音条件(公式の仕様を確認してから)。（適用済）
+- [ ] 口パクのゲージが2チャンク目以降0%になる件(`model->visemes` の競合を疑う)。
