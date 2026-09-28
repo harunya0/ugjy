@@ -7,33 +7,6 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 
 
 option(UGJY_PORTABLE "Disable -march=native for portable binaries" OFF)
-if(MSVC)
-    add_compile_options(/O2 /W3 /MP)
-else()
-    if(NOT UGJY_PORTABLE)
-        add_compile_options(-march=native)
-    endif()
-    add_compile_options(
-        -Wall -Wextra -Wpedantic
-        -O3 -flto
-        -fno-math-errno
-        -fno-trapping-math
-        -fomit-frame-pointer
-        -ffunction-sections -fdata-sections
-    )
-    add_link_options(-flto -O3)
-    if(NOT APPLE)
-        add_link_options(-Wl,--gc-sections)
-        add_link_options(-s)
-    endif()
-endif()
-
-# 開発時のバグを早期発見するためのコンパイラ警告
-if(MSVC)
-    add_compile_options(/W4)
-else()
-    add_compile_options(-Wall -Wextra -Wpedantic)
-endif()
 
 # Src 内の全ソースからライブラリ用ソース（main.c 除外）を抽出
 file(GLOB_RECURSE LIB_SOURCES CONFIGURE_DEPENDS "Src/*.c")
@@ -56,10 +29,33 @@ set_target_properties(ugjy_shared PROPERTIES
     SOVERSION 1
     VERSION 0.1.0
     POSITION_INDEPENDENT_CODE ON
+    C_VISIBILITY_PRESET hidden
+    VISIBILITY_INLINES_HIDDEN ON
     BUILD_RPATH "${CMAKE_CURRENT_SOURCE_DIR}/Lib/onnxruntime/lib"
 )
+
+target_compile_definitions(ugjy_shared PRIVATE UGJY_BUILDING_SHARED)
 target_include_directories(ugjy_shared PUBLIC ${UGJY_INC_DIRS})
 target_link_directories(ugjy_shared PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Lib)
+
+if(MSVC)
+    target_compile_options(ugjy_shared PRIVATE /O2 /W4 /MP)
+else()
+    target_compile_options(ugjy_shared PRIVATE
+        $<$<NOT:$<BOOL:${UGJY_PORTABLE}>>:-march=native>
+        -Wall -Wextra -Wpedantic
+        -O3 -flto=auto
+        -fvisibility=hidden
+        -fno-math-errno
+        -fno-trapping-math
+        -fomit-frame-pointer
+        -ffunction-sections -fdata-sections
+    )
+    target_link_options(ugjy_shared PRIVATE
+        -flto=auto -O3
+        $<$<NOT:$<PLATFORM_ID:Darwin>>:-Wl,--gc-sections -s>
+    )
+endif()
 
 if(UNIX AND NOT APPLE)
     target_link_libraries(ugjy_shared PRIVATE

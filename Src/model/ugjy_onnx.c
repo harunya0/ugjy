@@ -58,10 +58,15 @@ int ugjy_onnx_session_init(
         if (st) { s->api->ReleaseStatus(st); ugjy_onnx_destroy(s); return UGJY_ERR_ONNX_OPTIONS; }
         st = s->api->SetIntraOpNumThreads(s->session_options, num_threads);
         if (st) { s->api->ReleaseStatus(st); ugjy_onnx_destroy(s); return UGJY_ERR_ONNX_OPTIONS; }
+        st = s->api->AddSessionConfigEntry(s->session_options, "session.intra_op.allow_spinning", "1");
+        if (st) { s->api->ReleaseStatus(st); ugjy_onnx_destroy(s); return UGJY_ERR_ONNX_OPTIONS; }
     }
-    st = s->api->DisableMemPattern(s->session_options);
+    // 高速化: ONNX Runtime 内部アリーナとメモリパターン最適化を有効化 (malloc/freeのオーバーヘッドを完全撤廃)
+    st = s->api->SetSessionExecutionMode(s->session_options, ORT_SEQUENTIAL);
     if (st) { s->api->ReleaseStatus(st); ugjy_onnx_destroy(s); return UGJY_ERR_ONNX_OPTIONS; }
-    st = s->api->DisableCpuMemArena(s->session_options);
+    st = s->api->EnableCpuMemArena(s->session_options);
+    if (st) { s->api->ReleaseStatus(st); ugjy_onnx_destroy(s); return UGJY_ERR_ONNX_OPTIONS; }
+    st = s->api->EnableMemPattern(s->session_options);
     if (st) { s->api->ReleaseStatus(st); ugjy_onnx_destroy(s); return UGJY_ERR_ONNX_OPTIONS; }
 
     // グラフ最適化

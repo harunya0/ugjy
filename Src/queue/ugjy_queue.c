@@ -4,6 +4,8 @@
 #include <string.h>
 #include <time.h>
 #include <stdatomic.h>
+#include <xmmintrin.h>
+#include <pmmintrin.h>
 
 // リングのインデックスを 1 つ進める (UGJY_QUEUE_SLOTS は 2 の累乗でなくてよい)
 static inline uint32_t slot_next(uint32_t i) {
@@ -33,6 +35,10 @@ static void on_sentence_sliced(const char *sentence, void *user_data) {
 // 合成スレッド: 文 FIFO → PCM スロット
 //   再生スレッドが 1 文を再生している間に、次の文を先に合成しておく。
 static void* synth_thread_fn(void *arg) {
+    // 非正規化数による FPU 100倍遅延トラップを完全遮断 (Flush-To-Zero / Denormals-Are-Zero)
+    _MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_ON);
+    _MM_SET_DENORMALS_ZERO_MODE(_MM_DENORMALS_ZERO_ON);
+
     ugjy_queue_t *q = (ugjy_queue_t *)arg;
     char text[UGJY_FIFO_ITEM_MAX_LEN];
 
@@ -84,8 +90,8 @@ static void* synth_thread_fn(void *arg) {
         pthread_mutex_lock(&q->slot_mutex);
         q->slot_tail = slot_next(q->slot_tail);
         q->slot_count++;
-        pthread_cond_signal(&q->slot_not_empty);
         pthread_mutex_unlock(&q->slot_mutex);
+        pthread_cond_signal(&q->slot_not_empty);
     }
     return NULL;
 }
@@ -120,8 +126,8 @@ static void* play_thread_fn(void *arg) {
         pthread_mutex_lock(&q->slot_mutex);
         q->slot_head = slot_next(q->slot_head);
         q->slot_count--;
-        pthread_cond_signal(&q->slot_not_full);
         pthread_mutex_unlock(&q->slot_mutex);
+        pthread_cond_signal(&q->slot_not_full);
         finish_one(q);
     }
     return NULL;

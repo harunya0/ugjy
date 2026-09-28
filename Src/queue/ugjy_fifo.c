@@ -31,8 +31,8 @@ int ugjy_fifo_push(ugjy_fifo_t *f, const char *item) {
     f->tail = (f->tail + 1) & UGJY_FIFO_MASK;
     f->count++;
 
-    pthread_cond_signal(&f->not_empty);
     pthread_mutex_unlock(&f->mutex);
+    pthread_cond_signal(&f->not_empty);
     return UGJY_OK;
 }
 

@@ -68,13 +68,10 @@ static int step_embedder(
     OrtValue **out_phonemes_tensor,
     float **out_features
 ) {
-    int64_t *phoneme_buf = (int64_t *)ugjy_arena_alloc(arena, num_tokens * sizeof(int64_t));
-    if (!phoneme_buf) return UGJY_ERR_OUT_OF_MEMORY;
-    memcpy(phoneme_buf, tokens, num_tokens * sizeof(int64_t));
-
+    (void)arena;
     int64_t shape_L[2] = {1, (int64_t)num_tokens};
     OrtValue *t_phonemes = ugjy_onnx_create_tensor(
-        &model->embedder, phoneme_buf, num_tokens * sizeof(int64_t),
+        &model->embedder, (void *)tokens, num_tokens * sizeof(int64_t),
         shape_L, 2, ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64
     );
     if (!t_phonemes) return UGJY_ERR_ONNX_TENSOR;
@@ -118,25 +115,22 @@ static int step_variance(
     float **out_pitches,
     float **out_durations
 ) {
-    int64_t *phoneme_buf = (int64_t *)ugjy_arena_alloc(arena, num_tokens * sizeof(int64_t));
-    int64_t *accent_buf  = (int64_t *)ugjy_arena_alloc(arena, num_tokens * sizeof(int64_t));
-    int64_t *spk_buf     = (int64_t *)ugjy_arena_alloc(arena, sizeof(int64_t));
-    if (!phoneme_buf || !accent_buf || !spk_buf) return UGJY_ERR_OUT_OF_MEMORY;
-
-    memcpy(phoneme_buf, tokens, num_tokens * sizeof(int64_t));
+    int64_t *accent_buf = NULL;
     if (prosody_features) {
-        memcpy(accent_buf, prosody_features, num_tokens * sizeof(int64_t));
+        accent_buf = (int64_t *)prosody_features;
     } else {
+        accent_buf = (int64_t *)ugjy_arena_alloc(arena, num_tokens * sizeof(int64_t));
+        if (!accent_buf) return UGJY_ERR_OUT_OF_MEMORY;
         for (size_t i = 0; i < num_tokens; i++) accent_buf[i] = 4; // デフォルト: _ (変化なし)
     }
-    *spk_buf = speaker_id;
+    int64_t spk_buf = speaker_id;
 
     int64_t shape_L[2] = {1, (int64_t)num_tokens};
     int64_t shape_1[1] = {1};
 
-    OrtValue *t_var_phonemes = ugjy_onnx_create_tensor(&model->variance, phoneme_buf, num_tokens * sizeof(int64_t), shape_L, 2, ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64);
+    OrtValue *t_var_phonemes = ugjy_onnx_create_tensor(&model->variance, (void *)tokens, num_tokens * sizeof(int64_t), shape_L, 2, ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64);
     OrtValue *t_var_accents  = ugjy_onnx_create_tensor(&model->variance, accent_buf, num_tokens * sizeof(int64_t), shape_L, 2, ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64);
-    OrtValue *t_var_speaker  = ugjy_onnx_create_tensor(&model->variance, spk_buf, sizeof(int64_t), shape_1, 1, ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64);
+    OrtValue *t_var_speaker  = ugjy_onnx_create_tensor(&model->variance, &spk_buf, sizeof(int64_t), shape_1, 1, ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64);
     if (!t_var_phonemes || !t_var_accents || !t_var_speaker) {
         if (t_var_phonemes) model->variance.api->ReleaseValue(t_var_phonemes);
         if (t_var_accents)  model->variance.api->ReleaseValue(t_var_accents);
@@ -199,9 +193,6 @@ static int step_length_regulator(
     float *lr_pitches  = (float *)ugjy_arena_alloc(arena, total_frames * sizeof(float));
     if (!lr_features || !lr_pitches) return UGJY_ERR_OUT_OF_MEMORY;
 
-    memset(lr_features, 0, total_frames * 192 * sizeof(float));
-    memset(lr_pitches, 0, total_frames * sizeof(float));
-
     size_t curr_frame = 0;
     for (size_t i = 0; i < num_tokens; i++) {
         int cnt = frame_counts[i];
@@ -232,9 +223,8 @@ static int step_decoder(
     float **out_wav_data,
     size_t *out_wav_samples
 ) {
-    int64_t *spk_buf = (int64_t *)ugjy_arena_alloc(arena, sizeof(int64_t));
-    if (!spk_buf) return UGJY_ERR_OUT_OF_MEMORY;
-    *spk_buf = speaker_id;
+    (void)arena;
+    int64_t spk_buf = speaker_id;
 
     int64_t shape_dec_feat[3] = {1, (int64_t)total_frames, 192};
     int64_t shape_dec_pitch[2] = {1, (int64_t)total_frames};
@@ -242,7 +232,7 @@ static int step_decoder(
 
     OrtValue *t_dec_features = ugjy_onnx_create_tensor(&model->decoder, (void *)lr_features, total_frames * 192 * sizeof(float), shape_dec_feat, 3, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT);
     OrtValue *t_dec_pitches  = ugjy_onnx_create_tensor(&model->decoder, (void *)lr_pitches, total_frames * sizeof(float), shape_dec_pitch, 2, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT);
-    OrtValue *t_dec_speaker  = ugjy_onnx_create_tensor(&model->decoder, spk_buf, sizeof(int64_t), shape_1, 1, ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64);
+    OrtValue *t_dec_speaker  = ugjy_onnx_create_tensor(&model->decoder, &spk_buf, sizeof(int64_t), shape_1, 1, ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64);
 
     if (!t_dec_features || !t_dec_pitches || !t_dec_speaker) {
         if (t_dec_features) model->decoder.api->ReleaseValue(t_dec_features);
@@ -366,9 +356,6 @@ int ugjy_model_infer(
 
     if (ret != UGJY_OK) goto cleanup;
 
-    // Step 5: 口パク Viseme 生成 (Live2D パラメータ算出)
-    ugjy_viseme_generate(req->tokens, frame_counts, req->num_tokens, model->visemes, 2048, &model->num_visemes);
-
     // Step 6: 韻律・ピッチ加工 (平滑化・抑揚・1/f揺らぎ・ささやき)
     float *temp_pitches = (float *)ugjy_arena_alloc(arena, total_frames * sizeof(float));
     ret = ugjy_prosody_process(lr_pitches, total_frames, temp_pitches, req->emotion, req->style);
@@ -431,6 +418,9 @@ int ugjy_model_infer(
 
     ugjy_dsp_postprocess(out_pcm, copy_samples, model->sample_rate, req->style, &model->dsp_state, arena);
     *out_samples = copy_samples;
+
+    // Step 9: 口パク Viseme 生成 (Live2D パラメータ算出: 波形出力完了後に遅延実行)
+    ugjy_viseme_generate(req->tokens, frame_counts, req->num_tokens, model->visemes, 2048, &model->num_visemes);
 
 cleanup:
     ugjy_arena_restore(arena, arena_marker);

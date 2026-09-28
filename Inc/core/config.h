@@ -48,19 +48,33 @@ typedef struct {
     uint8_t num_threads;          // 推論スレッド数 (デフォルト4)
 } ugjy_config_t;
 
-ugjy_config_t ugjy_config_default(void);
-ugjy_config_t ugjy_config_get(void);
+#ifndef UGJY_API
+#if defined(_WIN32) || defined(__CYGWIN__)
+  #if defined(UGJY_BUILDING_SHARED)
+    #define UGJY_API __declspec(dllexport)
+  #else
+    #define UGJY_API __declspec(dllimport)
+  #endif
+#elif defined(__GNUC__) && __GNUC__ >= 4
+  #define UGJY_API __attribute__((visibility("default")))
+#else
+  #define UGJY_API
+#endif
+#endif
+
+UGJY_API ugjy_config_t ugjy_config_default(void);
+UGJY_API ugjy_config_t ugjy_config_get(void);
 
 // 設定を一括変更
-void ugjy_config_set(const ugjy_config_t *config);
+UGJY_API void ugjy_config_set(const ugjy_config_t *config);
 
 // 設定を個別変更
-void ugjy_config_set_sample_rate(uint32_t sample_rate);
-void ugjy_config_set_arena_size(size_t size);
-void ugjy_config_set_max_tokens(uint32_t max_tokens);
-void ugjy_config_set_max_audio_sec(uint32_t max_audio_sec);
-void ugjy_config_set_flags(uint32_t flags);
-void ugjy_config_set_num_threads(uint8_t num_threads);
+UGJY_API void ugjy_config_set_sample_rate(uint32_t sample_rate);
+UGJY_API void ugjy_config_set_arena_size(size_t size);
+UGJY_API void ugjy_config_set_max_tokens(uint32_t max_tokens);
+UGJY_API void ugjy_config_set_max_audio_sec(uint32_t max_audio_sec);
+UGJY_API void ugjy_config_set_flags(uint32_t flags);
+UGJY_API void ugjy_config_set_num_threads(uint8_t num_threads);
 
 // 推奨アリーナサイズ
 #define UGJY_DEFAULT_ARENA_SIZE (32 * 1024 * 1024)

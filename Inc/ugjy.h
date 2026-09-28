@@ -12,6 +12,18 @@
 extern "C" {
 #endif
 
+#if defined(_WIN32) || defined(__CYGWIN__)
+  #if defined(UGJY_BUILDING_SHARED)
+    #define UGJY_API __declspec(dllexport)
+  #else
+    #define UGJY_API __declspec(dllimport)
+  #endif
+#elif defined(__GNUC__) && __GNUC__ >= 4
+  #define UGJY_API __attribute__((visibility("default")))
+#else
+  #define UGJY_API
+#endif
+
 // 音声設定パラメータ
 typedef struct {
     uint32_t       speaker_id;         // 固定話者ID
@@ -87,7 +99,7 @@ typedef struct ugjy_context ugjy_context_t;
 // ============================================================================
 
 // モデルとG2Pを一括初期化（malloc完全禁止、渡されたアリーナメモリのみ使用）
-ugjy_context_t* ugjy_init(
+UGJY_API ugjy_context_t* ugjy_init(
     const char  *model_path,
     const char  *config_path, // G2P 設定パス (NULLなら models/tsukuyomi-v3-1/model_config.json)
     void        *memory_pool,
@@ -95,14 +107,14 @@ ugjy_context_t* ugjy_init(
 );
 
 // 終了・リソース解放
-void ugjy_destroy(ugjy_context_t *ctx);
+UGJY_API void ugjy_destroy(ugjy_context_t *ctx);
 
 // ============================================================================
 // 2. リアルタイム・キュー＆非同期発話 API (話しかけられた時の停止対応)
 // ============================================================================
 
 // バックグラウンド・キューワーカースレッドの開始
-int  ugjy_start(
+UGJY_API int  ugjy_start(
     ugjy_context_t   *ctx,
     const ugjy_t     *params,
     ugjy_speech_cb_t  callback,
@@ -110,29 +122,29 @@ int  ugjy_start(
 );
 
 // LLM等のトークンを逐次投入（句読点検知で自動的にキューへ push して発話）
-int  ugjy_feed(ugjy_context_t *ctx, const char *token);
+UGJY_API int  ugjy_feed(ugjy_context_t *ctx, const char *token);
 
 // 未完トークンバッファの強制フラッシュ（文末など）
-int  ugjy_flush(ugjy_context_t *ctx);
+UGJY_API int  ugjy_flush(ugjy_context_t *ctx);
 
 // 1文を直接キューに追加（動的追加）
-int  ugjy_push(ugjy_context_t *ctx, const char *sentence);
+UGJY_API int  ugjy_push(ugjy_context_t *ctx, const char *sentence);
 
 // ★ 人間に話しかけられた時の即座のTTS停止＆キュー全消去 (Barge-in)
-int  ugjy_stop(ugjy_context_t *ctx);
+UGJY_API int  ugjy_stop(ugjy_context_t *ctx);
 
 // 待機・状態確認
-void     ugjy_wait_idle(ugjy_context_t *ctx);
-uint32_t ugjy_get_queue_count(ugjy_context_t *ctx);
-bool     ugjy_is_speaking(ugjy_context_t *ctx);
-bool     ugjy_is_interrupted(ugjy_context_t *ctx);
+UGJY_API void     ugjy_wait_idle(ugjy_context_t *ctx);
+UGJY_API uint32_t ugjy_get_queue_count(ugjy_context_t *ctx);
+UGJY_API bool     ugjy_is_speaking(ugjy_context_t *ctx);
+UGJY_API bool     ugjy_is_interrupted(ugjy_context_t *ctx);
 
 // ============================================================================
 // 3. 単体同期合成・ユーティリティ API
 // ============================================================================
 
 // 生テキストから一発で PCM 波形を直接合成
-int ugjy_synthesize_text(
+UGJY_API int ugjy_synthesize_text(
     ugjy_context_t *ctx,
     const char     *text,
     const char     *lang,
@@ -147,7 +159,7 @@ int ugjy_synthesize_text(
 // ============================================================================
 
 // 楽譜（ノート配列）から PCM 波形を直接合成
-int ugjy_synthesize_score(
+UGJY_API int ugjy_synthesize_score(
     ugjy_context_t    *ctx,
     const ugjy_note_t *notes,
     size_t             num_notes,
@@ -158,7 +170,7 @@ int ugjy_synthesize_score(
 );
 
 // 歌詞付きMIDIファイルから直接合成
-int ugjy_synthesize_midi(
+UGJY_API int ugjy_synthesize_midi(
     ugjy_context_t    *ctx,
     const char        *midi_path,
     int                track_index,
@@ -169,7 +181,7 @@ int ugjy_synthesize_midi(
 );
 
 // MIDIファイル ＋ 歌詞文字列（流し込み）から直接合成
-int ugjy_synthesize_midi_with_lyrics(
+UGJY_API int ugjy_synthesize_midi_with_lyrics(
     ugjy_context_t    *ctx,
     const char        *midi_path,
     int                track_index,
@@ -181,24 +193,24 @@ int ugjy_synthesize_midi_with_lyrics(
 );
 
 // 非同期発話キューへの歌唱投入（会話とシームレスに混在可能）
-int ugjy_push_score(ugjy_context_t *ctx, const ugjy_note_t *notes, size_t num_notes);
-int ugjy_push_midi(ugjy_context_t *ctx, const char *midi_path, int track_index);
-int ugjy_push_midi_with_lyrics(ugjy_context_t *ctx, const char *midi_path, int track_index, const char *lyrics_text);
+UGJY_API int ugjy_push_score(ugjy_context_t *ctx, const ugjy_note_t *notes, size_t num_notes);
+UGJY_API int ugjy_push_midi(ugjy_context_t *ctx, const char *midi_path, int track_index);
+UGJY_API int ugjy_push_midi_with_lyrics(ugjy_context_t *ctx, const char *midi_path, int track_index, const char *lyrics_text);
 
 // 直前の推論で生成された口パク Viseme 配列を取得
-const ugjy_viseme_t* ugjy_get_visemes(ugjy_context_t *ctx, size_t *out_count);
+UGJY_API const ugjy_viseme_t* ugjy_get_visemes(ugjy_context_t *ctx, size_t *out_count);
 
 // float PCM 配列を 16-bit WAV ファイルとして保存
-int ugjy_write_wav(
+UGJY_API int ugjy_write_wav(
     const char  *filepath,
     const float *pcm,
     size_t       num_samples,
     int          sample_rate
 );
 
-size_t   ugjy_get_required_memory(const char *model_path);
-uint32_t ugjy_get_num_speakers(ugjy_context_t *ctx);
-int      ugjy_get_sample_rate(ugjy_context_t *ctx);
+UGJY_API size_t   ugjy_get_required_memory(const char *model_path);
+UGJY_API uint32_t ugjy_get_num_speakers(ugjy_context_t *ctx);
+UGJY_API int      ugjy_get_sample_rate(ugjy_context_t *ctx);
 
 #ifdef __cplusplus
 }

@@ -29,11 +29,24 @@ pub unsafe extern "C" fn ugjy_g2p_create(
         let config_str = unsafe { CStr::from_ptr(config_path) }.to_str().ok()?;
 
         let mut ja_phonemizer = None;
-        // 1. まず models/naist-jdic (または環境変数) の mmap ゼロコピー辞書を試行
-        let dict_path = std::path::Path::new("models/naist-jdic");
-        if dict_path.exists() {
-            if let Ok(ja) = JapanesePhonemizer::new_mmap(dict_path) {
-                ja_phonemizer = Some(ja);
+        // 1. mmap ゼロコピー辞書を多段探索 (カレント, config親ディレクトリ, 固定パス)
+        let config_p = std::path::Path::new(config_str);
+        let mut candidates = vec![
+            std::path::PathBuf::from("models/naist-jdic"),
+            std::path::PathBuf::from("/home/haru/pro/ugjy/models/naist-jdic"),
+        ];
+        if let Some(parent) = config_p.parent() {
+            if let Some(grandparent) = parent.parent() {
+                candidates.push(grandparent.join("naist-jdic"));
+            }
+            candidates.push(parent.join("naist-jdic"));
+        }
+        for dict_path in &candidates {
+            if dict_path.exists() {
+                if let Ok(ja) = JapanesePhonemizer::new_mmap(dict_path) {
+                    ja_phonemizer = Some(ja);
+                    break;
+                }
             }
         }
         // 2. mmap 辞書が読み込めなかった場合のみ、従来の bundled 版にフォールバック
